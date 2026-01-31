@@ -4,199 +4,114 @@ package cli
 import (
 	"context"
 	"fmt"
-	"os"
+	"runtime"
+	"time"
 
-	"github.com/spf13/cobra"
 	"github.com/chazuruo/svf/internal/upgrade"
+	"github.com/spf13/cobra"
 )
 
+// UpgradeOptions contains the options for the upgrade command.
+type UpgradeOptions struct {
+	CheckOnly bool
+	Yes       bool
+	Owner     string
+	Repo      string
+}
+
 // NewUpgradeCommand creates the upgrade command.
-func NewUpgradeCommand() *cobra.Command {
-	var (
-		checkOnly bool
-		yes       bool
-		pre       bool
-		noVerify  bool
-	)
+func NewUpgradeCommand(version, owner, repo string) *cobra.Command {
+	opts := &UpgradeOptions{
+		Owner: owner,
+		Repo:  repo,
+	}
 
 	cmd := &cobra.Command{
 		Use:   "upgrade",
-		Short: "Update to the latest version",
-		Long: `Check for updates and upgrade to the latest version of svf.
+		Short: "Upgrade to the latest version",
+		Long: `Upgrade svf to the latest version.
 
-This command will:
-1. Check GitHub releases for the latest version
-2. Compare with your current version
-3. Download the new binary if available
-4. Verify checksums and GPG signatures (if available)
-5. Install the update (with automatic rollback on failure)
-
-GPG Signature Verification:
-If SVF_PUBLIC_KEY environment variable is set to a public key file path,
-the upgrade command will verify GPG signatures of release checksums.
-Set SVF_PUBLIC_KEY to enable this feature.
-
-Exit codes:
-  0 - Success or already up-to-date
-  1 - Generic error
-  2 - Network error
-  3 - Verification failed
-  4 - Installation failed
-  5 - Already on latest version (with --check-only)`,
+Checks for updates on GitHub and downloads the latest release if available.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runUpgrade(cmd.Context(), checkOnly, yes, pre, noVerify)
+			return runUpgrade(opts, version)
 		},
 	}
 
-	cmd.Flags().BoolVar(&checkOnly, "check-only", false,
-		"check for updates without installing")
-	cmd.Flags().BoolVar(&yes, "yes", false,
-		"skip confirmation prompt")
-	cmd.Flags().BoolVar(&pre, "pre", false,
-		"include pre-releases")
-	cmd.Flags().BoolVar(&noVerify, "no-verify", false,
-		"skip signature verification")
+	cmd.Flags().BoolVar(&opts.CheckOnly, "check", false, "only check for updates, don't download")
+	cmd.Flags().BoolVar(&opts.Yes, "yes", false, "skip confirmation prompt")
 
 	return cmd
 }
 
-func runUpgrade(ctx context.Context, checkOnly, yes, pre, noVerify bool) error {
-	// Get current binary path
-	binaryPath, err := os.Executable()
-	if err != nil {
-		return fmt.Errorf("failed to get executable path: %w", err)
-	}
+func runUpgrade(opts *UpgradeOptions, currentVersion string) error {
+	upgrader := upgrade.NewUpdater(currentVersion, opts.Owner, opts.Repo)
 
-	// Get current version
-	currentVersion := Version // From version.go
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
 
-	// Create checker
-	checker := upgrade.NewChecker("chazu", "faire", pre)
-
-	// Check for updates
 	fmt.Println("Checking for updates...")
-	release, err := checker.CheckLatest(ctx)
+
+	release, err := upgrader.CheckForUpdate(ctx)
 	if err != nil {
-		return fmt.Errorf("failed to check for updates: %w", err)
+		return fmt.Errorf("checking for updates: %w", err)
 	}
 
-	// Compare versions
-	cmp, err := checker.CompareVersions(currentVersion, release.TagName)
-	if err != nil {
-		return fmt.Errorf("failed to compare versions: %w", err)
-	}
-
-	if cmp == 0 || cmp > 0 {
-		fmt.Printf("Already on latest version: %s\n", currentVersion)
-		if checkOnly {
-			return upgrade.NewError(upgrade.ExitAlreadyLatest, "Already on latest version", nil)
-		}
+	if release == nil {
+		fmt.Println("Already up to date.")
 		return nil
 	}
 
-	// Update available
-	fmt.Printf("Update available: %s -> %s\n", currentVersion, release.TagName)
+	fmt.Printf("\nNew version available: %s\n", release.TagName)
+	if release.Name != "" {
+		fmt.Printf("Release: %s\n", release.Name)
+	}
+	fmt.Printf("Published: %s\n", release.PublishedAt)
+
 	if release.Body != "" {
-		// Print first line of release notes
-		notes := release.Body
-		if len(notes) > 200 {
-			notes = notes[:200] + "..."
-		}
-		fmt.Printf("\nRelease notes:\n%s\n", notes)
+		fmt.Printf("\nRelease notes:\n%s\n", release.Body)
 	}
 
-	if checkOnly {
-		fmt.Println("\nUse --yes to install the update")
+	if opts.CheckOnly {
 		return nil
 	}
+
+	// Find asset for current platform
+	platform := upgrade.CurrentPlatform()
+	asset, err := release.FindAssetForPlatform(runtime.GOOS, runtime.GOARCH)
+	if err != nil {
+		return fmt.Errorf("finding binary for %s: %w", platform, err)
+	}
+
+	fmt.Printf("\nFound binary: %s (%.2f MB)\n", asset.Name, float64(asset.Size)/(1024*1024))
 
 	// Confirm before downloading
-	if !yes {
-		fmt.Print("\nInstall update? [y/N] ")
+	if !opts.Yes {
+		fmt.Print("\nDownload and install? [y/N] ")
 		var response string
-		_, _ = fmt.Scanln(&response)
+		if _, err := fmt.Scanln(&response); err != nil {
+			return fmt.Errorf("reading input: %w", err)
+		}
 		if response != "y" && response != "Y" {
-			fmt.Println("Update cancelled")
+			fmt.Println("Aborted.")
 			return nil
 		}
 	}
 
-	// Download and install
-	return installUpdate(ctx, binaryPath, release, noVerify)
-}
+	fmt.Println("\nDownloading...")
 
-func installUpdate(ctx context.Context, binaryPath string, release *upgrade.Release, noVerify bool) error {
-	platform := upgrade.NewPlatform()
-	finder := upgrade.NewAssetFinder(platform, "svf")
-
-	// Find binary asset
-	binaryAsset, err := finder.FindBinary(release)
+	binary, err := upgrader.Download(ctx, asset)
 	if err != nil {
-		return fmt.Errorf("failed to find binary: %w", err)
+		return fmt.Errorf("downloading release: %w", err)
 	}
 
-	// Create temp directory
-	tempDir, err := os.MkdirTemp("", "svf-upgrade-*")
-	if err != nil {
-		return fmt.Errorf("failed to create temp directory: %w", err)
-	}
-	defer func() { _ = os.RemoveAll(tempDir) }()
+	fmt.Println("Installing...")
 
-	// Download
-	downloader := upgrade.NewDownloader()
-	archivePath := fmt.Sprintf("%s/%s", tempDir, binaryAsset.Name)
-
-	fmt.Printf("\nDownloading %s...\n", binaryAsset.Name)
-	if err := downloader.Download(ctx, binaryAsset.URL, archivePath); err != nil {
-		return fmt.Errorf("download failed: %w", err)
-	}
-	fmt.Printf("Downloaded to %s\n", archivePath)
-
-	// Verify checksums if available
-	if !noVerify {
-		checksumAsset, err := finder.FindChecksum(release)
-		if err == nil && checksumAsset != nil {
-			checksumPath := fmt.Sprintf("%s/%s", tempDir, checksumAsset.Name)
-			fmt.Printf("Downloading checksums...\n")
-			if dlErr := downloader.Download(ctx, checksumAsset.URL, checksumPath); dlErr == nil {
-				if err := downloader.VerifyChecksum(archivePath, checksumPath, binaryAsset.Name); err != nil {
-					return fmt.Errorf("checksum verification failed: %w", err)
-				}
-				fmt.Println("Checksum verified")
-
-				// Verify GPG signature if available
-				signatureAsset, sigErr := finder.FindSignature(release)
-				if sigErr == nil && signatureAsset != nil {
-					signaturePath := fmt.Sprintf("%s/%s", tempDir, signatureAsset.Name)
-					fmt.Printf("Downloading signature...\n")
-					if sigDlErr := downloader.Download(ctx, signatureAsset.URL, signaturePath); sigDlErr == nil {
-						// Try to get public key from environment or config
-						publicKeyPath := os.Getenv("SVF_PUBLIC_KEY")
-						if publicKeyPath != "" {
-							if sigErr := downloader.VerifySignature(checksumPath, signaturePath, publicKeyPath); sigErr != nil {
-								return fmt.Errorf("signature verification failed: %w", sigErr)
-							}
-							fmt.Println("Signature verified")
-						} else {
-							fmt.Println("Warning: Signature file found but SVF_PUBLIC_KEY not set, skipping signature verification")
-						}
-					}
-				}
-			}
-		}
+	if err := upgrader.ApplyUpdate(binary); err != nil {
+		return fmt.Errorf("applying update: %w", err)
 	}
 
-	// Install
-	fmt.Println("Installing update...")
-	installer := upgrade.NewInstaller(binaryPath)
-	defer installer.Cleanup()
-
-	if err := installer.Install(archivePath); err != nil {
-		return fmt.Errorf("installation failed: %w", err)
-	}
-
-	fmt.Printf("\nSuccessfully updated to %s!\n", release.TagName)
-	fmt.Printf("Run 'svf version' to verify.\n")
+	fmt.Printf("\nSuccessfully upgraded to %s!\n", release.TagName)
+	fmt.Println("Please restart to use the new version.")
 
 	return nil
 }

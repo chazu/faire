@@ -17,6 +17,9 @@ var Commit = "unknown"
 // Date is set at build time using ldflags
 var Date = "unknown"
 
+// BuiltBy is set at build time using ldflags
+var BuiltBy = "unknown"
+
 func main() {
 	rootCmd := &cobra.Command{
 		Use:   "svf",
@@ -48,8 +51,8 @@ but stores all workflows and metadata in a Git repository instead of a hosted ba
 	rootCmd.AddCommand(cli.NewSearchCommand())
 	rootCmd.AddCommand(cli.NewAskCommand())
 	rootCmd.AddCommand(cli.NewExportCommand())
-	rootCmd.AddCommand(cli.NewUpgradeCommand())
-	rootCmd.AddCommand(cli.NewVersionCommand())
+	rootCmd.AddCommand(cli.NewUpgradeCommand(Version, "chazuruo", "faire"))
+	rootCmd.AddCommand(cli.NewVersionCommand(Version, Commit, Date, BuiltBy))
 
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)

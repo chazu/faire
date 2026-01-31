@@ -5,70 +5,77 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"runtime"
 
 	"github.com/spf13/cobra"
 )
 
-// versionInfo contains version information.
-type versionInfo struct {
-	Version   string `json:"version"`
-	Commit    string `json:"commit"`
-	BuildDate string `json:"build_date"`
-	GoVersion string `json:"go_version"`
+// VersionInfo contains version information for the binary.
+type VersionInfo struct {
+	Version string `json:"version"`
+	Commit  string `json:"commit"`
+	Date    string `json:"date"`
+	BuiltBy string `json:"built_by"`
+	Go      string `json:"go_version"`
 }
 
-// Version is set at build time using ldflags.
-var Version = "dev"
-
-// Commit is set at build time using ldflags.
-var Commit = "unknown"
-
-// BuildDate is set at build time using ldflags.
-var BuildDate = "unknown"
+// VersionOptions contains the options for the version command.
+type VersionOptions struct {
+	Short bool
+	JSON  bool
+}
 
 // NewVersionCommand creates the version command.
-func NewVersionCommand() *cobra.Command {
-	var jsonOutput bool
+func NewVersionCommand(version, commit, date, builtBy string) *cobra.Command {
+	opts := &VersionOptions{}
 
 	cmd := &cobra.Command{
 		Use:   "version",
-		Short: "Show version information",
-		Long:  `Display version information including semantic version, git commit hash, and build timestamp.`,
+		Short: "Display version information",
+		Long: `Display the svf version information.
+
+Shows version, commit hash, build date, who built it, and Go version.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runVersion(jsonOutput)
+			return runVersion(opts, version, commit, date, builtBy)
 		},
 	}
 
-	cmd.Flags().BoolVar(&jsonOutput, "json", false, "output version information as JSON")
+	cmd.Flags().BoolVar(&opts.Short, "short", false, "print only the version number")
+	cmd.Flags().BoolVar(&opts.JSON, "json", false, "output in JSON format")
 
 	return cmd
 }
 
-func runVersion(jsonOutput bool) error {
-	info := versionInfo{
-		Version:   Version,
-		Commit:    Commit,
-		BuildDate: BuildDate,
-		GoVersion: "",
+func runVersion(opts *VersionOptions, version, commit, date, builtBy string) error {
+	info := VersionInfo{
+		Version: version,
+		Commit:  commit,
+		Date:    date,
+		BuiltBy: builtBy,
+		Go:      runtime.Version(),
 	}
 
-	if jsonOutput {
+	if opts.JSON {
 		encoder := json.NewEncoder(os.Stdout)
 		encoder.SetIndent("", "  ")
 		if err := encoder.Encode(info); err != nil {
-			return err
+			return fmt.Errorf("failed to encode JSON: %w", err)
 		}
 		return nil
 	}
 
-	// Text output
+	if opts.Short {
+		fmt.Println(info.Version)
+		return nil
+	}
+
 	fmt.Printf("svf version %s\n", info.Version)
-	if info.Commit != "unknown" && info.Commit != "" {
-		fmt.Printf("commit: %s\n", info.Commit)
+	fmt.Printf("commit: %s\n", info.Commit)
+	fmt.Printf("built at: %s\n", info.Date)
+	if info.BuiltBy != "" && info.BuiltBy != "unknown" {
+		fmt.Printf("built by: %s\n", info.BuiltBy)
 	}
-	if info.BuildDate != "unknown" && info.BuildDate != "" {
-		fmt.Printf("built: %s\n", info.BuildDate)
-	}
+	fmt.Printf("go version: %s\n", info.Go)
 
 	return nil
 }
