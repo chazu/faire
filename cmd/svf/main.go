@@ -29,6 +29,9 @@ but stores all workflows and metadata in a Git repository instead of a hosted ba
 		},
 	}
 
+	// Add global flags
+	cli.AddGlobalFlags(rootCmd)
+
 	rootCmd.CompletionOptions.DisableDefaultCmd = true
 
 	// Add subcommands
