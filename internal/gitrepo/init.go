@@ -10,8 +10,16 @@ func (r *gitRepo) Init(ctx context.Context, opts InitOptions) error {
 	if opts.Bare {
 		args = append(args, "--bare")
 	}
-	_, _, err := r.runGit(ctx, args...)
-	return err
+	if _, _, err := r.runGit(ctx, args...); err != nil {
+		return err
+	}
+
+	// Set default branch if specified
+	if opts.DefaultBranch != "" {
+		_, _, _ = r.runGit(ctx, "branch", "-M", opts.DefaultBranch)
+	}
+
+	return nil
 }
 
 // IsInitialized returns true if the repository is already initialized.

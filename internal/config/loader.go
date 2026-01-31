@@ -64,6 +64,9 @@ func Load(path string) (*Config, error) {
 	// Apply environment variable overrides
 	applyEnvOverrides(cfg)
 
+	// Expand tilde in paths
+	expandPath(cfg)
+
 	// Validate
 	if err := cfg.Validate(); err != nil {
 		return nil, fmt.Errorf("config validation failed: %w", err)
@@ -81,6 +84,7 @@ func LoadWithDefaults() (*Config, error) {
 		// No config file found, return defaults
 		cfg := DefaultConfig()
 		applyEnvOverrides(cfg)
+		expandPath(cfg)
 
 		// Note: We don't validate here because defaults may have
 		// intentionally empty fields (like identity.path) that users
@@ -186,4 +190,14 @@ func applyEnvOverrides(c *Config) {
 	applyString("GITSAVVY_AI_API_KEY_ENV", &c.AI.APIKeyEnv)
 	applyString("GITSAVVY_AI_REDACT", &c.AI.Redact)
 	applyBool("GITSAVVY_AI_CONFIRM_SEND", &c.AI.ConfirmSend)
+}
+
+// expandPath expands ~ to the home directory in the repo path.
+func expandPath(c *Config) {
+	if strings.HasPrefix(c.Repo.Path, "~/") || c.Repo.Path == "~" {
+		homeDir, err := os.UserHomeDir()
+		if err == nil {
+			c.Repo.Path = filepath.Join(homeDir, strings.TrimPrefix(c.Repo.Path, "~/"))
+		}
+	}
 }

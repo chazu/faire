@@ -2,6 +2,7 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -182,6 +183,11 @@ func runInitInteractive(opts *InitOptions) error {
 		if err := cloneRepoSpinner(remoteURL, localPath, branch); err != nil {
 			return err
 		}
+	} else {
+		// Local repo - initialize if needed
+		if err := initLocalRepoSpinner(localPath, branch); err != nil {
+			return err
+		}
 	}
 
 	// Build config
@@ -249,6 +255,11 @@ func runInitNonInteractive(opts *InitOptions) error {
 			return fmt.Errorf("failed to clone repo: %w", err)
 		}
 		fmt.Printf("Cloned %s to %s\n", opts.Remote, cfg.Repo.Path)
+	} else {
+		// Local repo - initialize if needed
+		if err := initLocalRepoSpinner(cfg.Repo.Path, cfg.Repo.Branch); err != nil {
+			return fmt.Errorf("failed to initialize local repo: %w", err)
+		}
 	}
 
 	// Validate
@@ -283,6 +294,56 @@ func cloneRepoSpinner(remoteURL, localPath, branch string) error {
 	}
 
 	fmt.Println("✓ Repository cloned")
+	return nil
+}
+
+// initLocalRepoSpinner initializes a local repository if needed.
+func initLocalRepoSpinner(localPath, branch string) error {
+	fmt.Printf("Setting up local repository at %s...\n", localPath)
+
+	// Check if path exists
+	info, err := os.Stat(localPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			// Create directory and initialize
+			if err := os.MkdirAll(localPath, 0755); err != nil {
+				return fmt.Errorf("failed to create directory: %w", err)
+			}
+			return initGitRepo(localPath, branch)
+		}
+		return fmt.Errorf("failed to stat path: %w", err)
+	}
+
+	// Path exists - check if it's already a git repo
+	if info.IsDir() {
+		repo := gitrepo.New(localPath)
+		ctx := context.Background()
+		if repo.IsInitialized(ctx) {
+			fmt.Println("✓ Using existing git repository")
+			return nil
+		}
+		// Directory exists but not a git repo - initialize it
+		return initGitRepo(localPath, branch)
+	}
+
+	return fmt.Errorf("path exists but is not a directory: %s", localPath)
+}
+
+// initGitRepo initializes a git repository in the given directory.
+func initGitRepo(path, branch string) error {
+	repo := gitrepo.New(path)
+	ctx := context.Background()
+
+	opts := gitrepo.InitOptions{}
+	if branch != "" {
+		opts.DefaultBranch = branch
+	}
+
+	if err := repo.Init(ctx, opts); err != nil {
+		return fmt.Errorf("failed to initialize git repo: %w", err)
+	}
+
+	fmt.Println("✓ Git repository initialized")
 	return nil
 }
 
