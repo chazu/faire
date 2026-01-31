@@ -1,4 +1,4 @@
-# git-savvy Makefile
+.PHONY: all build test test-coverage test-short run clean fmt vet lint help
 
 # Build variables
 BINARY_NAME=gitsavvy
@@ -20,8 +20,7 @@ GOLINT=golangci-lint
 # Directories
 SRC=$(shell find . -name "*.go" -type f)
 
-.PHONY: all build test run clean fmt vet lint help
-
+## all: Default target - build binary
 all: build
 
 ## build: Compile the binary
@@ -31,10 +30,19 @@ build:
 	$(GOBUILD) $(LDFLAGS) -o $(BUILD_DIR)/$(BINARY_NAME) $(MAIN_PATH)
 	@echo "Built $(BUILD_DIR)/$(BINARY_NAME)"
 
-## test: Run tests
+## test: Run all tests with verbose output and race detector
 test:
 	@echo "Running tests..."
 	$(GOTEST) -v -race -cover ./...
+
+## test-coverage: Generate test coverage report
+test-coverage:
+	go test -v -race -coverprofile=coverage.out ./...
+	go tool cover -html=coverage.out -o coverage.html
+
+## test-short: Run short tests (skip long-running tests)
+test-short:
+	go test -short ./...
 
 ## run: Build and execute
 run: build
@@ -45,6 +53,8 @@ run: build
 clean:
 	@echo "Cleaning..."
 	@rm -rf $(BUILD_DIR)
+	rm -f coverage.out coverage.html
+	go clean -testcache
 	@echo "Clean complete"
 
 ## fmt: Format code

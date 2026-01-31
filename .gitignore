@@ -11,10 +11,14 @@ bin/
 *.dll
 *.so
 *.dylib
+
+# Test artifacts
 *.test
 *.out
-go.work
-go.work.sum
+coverage.html
+coverage.out
+/tmp/
+testdata/temp/
 
 # Dependency directories
 vendor/
@@ -29,3 +33,7 @@ vendor/
 # Debug
 debug
 __debug_bin*
+
+# Go workspace
+go.work
+go.work.sum
