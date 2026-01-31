@@ -210,8 +210,8 @@ func (r *runner) executeStep(ctx context.Context, stepIndex int, command, shell,
 		}
 
 		// Read output
-		go io.Copy(&output, stdout)
-		go io.Copy(&output, stderr)
+		go func() { _, _ = io.Copy(&output, stdout) }()
+		go func() { _, _ = io.Copy(&output, stderr) }()
 
 		// Wait for completion
 		if err := cmd.Wait(); err != nil {

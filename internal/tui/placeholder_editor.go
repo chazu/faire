@@ -380,15 +380,15 @@ func (d placeholderDelegate) Render(w io.Writer, m list.Model, index int, listIt
 		usedIn = fmt.Sprintf(" [steps: %s]", strings.Join(p.usedIn, ","))
 	}
 
-	fmt.Fprintf(w, "%s - %s%s\n", name, promptText, usedIn)
+	_, _ = fmt.Fprintf(w, "%s - %s%s\n", name, promptText, usedIn)
 
 	// Second line: default value
 	if p.placeholder.Default != "" {
 		defaultText := lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Render("  Default: " + p.placeholder.Default)
-		fmt.Fprintf(w, "%s\n", defaultText)
+		_, _ = fmt.Fprintf(w, "%s\n", defaultText)
 	} else if p.placeholder.Secret {
 		secretText := lipgloss.NewStyle().Foreground(lipgloss.Color("203")).Render("  [secret]")
-		fmt.Fprintf(w, "%s\n", secretText)
+		_, _ = fmt.Fprintf(w, "%s\n", secretText)
 	}
 }
 

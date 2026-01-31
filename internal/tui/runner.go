@@ -265,7 +265,7 @@ func (m RunnerModel) stepListView() string {
 	// Render list with custom styling
 	for i, item := range m.List.Items() {
 		step := item.(runnerStepItem)
-		style := m.normalStyle
+		var style lipgloss.Style
 
 		// Apply status-based styling
 		if i < m.CurrentStep {
@@ -466,6 +466,6 @@ func (d runnerStepDelegate) Render(w io.Writer, m list.Model, index int, listIte
 		text = normalStyle.Render("  " + s.Title())
 	}
 
-	fmt.Fprint(w, text)
+	_, _ = fmt.Fprint(w, text)
 }
 

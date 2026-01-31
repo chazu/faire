@@ -466,7 +466,7 @@ func (d stepDelegate) Render(w io.Writer, m list.Model, index int, listItem list
 		text = normalStyle.Render("  " + s.Title())
 	}
 
-	fmt.Fprint(w, text)
+	_, _ = fmt.Fprint(w, text)
 }
 
 // parseTags parses a comma-separated string into a slice of tags.

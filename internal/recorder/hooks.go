@@ -130,7 +130,7 @@ func NewSession(shell string) (*SessionConfig, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to create temp file: %w", err)
 	}
-	tmpFile.Close()
+	_ = tmpFile.Close()
 
 	return &SessionConfig{
 		CaptureFile: tmpFile.Name(),
@@ -166,10 +166,10 @@ func (s *SessionConfig) GetShellArgs() ([]string, error) {
 
 	// Write hook to init script
 	if _, err := initScript.WriteString(hookContent); err != nil {
-		initScript.Close()
+		_ = initScript.Close()
 		return nil, fmt.Errorf("failed to write init script: %w", err)
 	}
-	initScript.Close()
+	_ = initScript.Close()
 
 	// Build command based on shell
 	switch s.Shell {

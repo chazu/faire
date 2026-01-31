@@ -65,7 +65,7 @@ The workflow should be in YAML format with the following structure:
 
 	userPrompt := fmt.Sprintf("Generate a workflow for: %s", req.Prompt)
 	if req.Context != nil {
-		userPrompt += fmt.Sprintf("\n\nContext:")
+		userPrompt += "\n\nContext:"
 		if req.Context.CurrentDirectory != "" {
 			userPrompt += fmt.Sprintf("\n- Working directory: %s", req.Context.CurrentDirectory)
 		}
@@ -222,7 +222,7 @@ func (p *Provider) callAPI(ctx context.Context, systemPrompt, userPrompt string)
 	if err != nil {
 		return "", err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	// Read response
 	body, err := io.ReadAll(resp.Body)

@@ -228,12 +228,14 @@ func (s *FileSystemStore) matchesFilter(ref WorkflowRef, filter Filter, path str
 	if len(filter.Tags) > 0 {
 		// This is a simplified check - in production we'd load and check
 		// For now, skip tag filtering to avoid loading every workflow
+		_ = filter.Tags // TODO: implement tag filtering
 	}
 
 	// Filter by search (requires loading the workflow)
 	if filter.Search != "" {
 		// This requires loading the workflow to check title/description
 		// For now, skip search filtering
+		_ = filter.Search // TODO: implement search filtering
 	}
 
 	return true

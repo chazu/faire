@@ -5,8 +5,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"strings"
-	"syscall"
 
 	"github.com/spf13/cobra"
 	"github.com/chazuruo/svf/internal/history"
@@ -65,7 +63,7 @@ func runRecord(opts *RecordOptions) error {
 	if err != nil {
 		return fmt.Errorf("failed to create session: %w", err)
 	}
-	defer session.Cleanup()
+	defer func() { _ = session.Cleanup() }()
 
 	// Get shell arguments
 	shellArgs, err := session.GetShellArgs()
@@ -135,7 +133,7 @@ func parseCaptureFile(path string) ([]CapturedCommand, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to open capture file: %w", err)
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	// Parse the file - format is timestamp\x1Fcwd\x1Fcommand
 	// For now, return empty since we haven't implemented the parser yet
@@ -247,49 +245,3 @@ type CapturedCommand struct {
 	Command   string `json:"command"`
 }
 
-// parseCaptureFileLine parses a single line from the capture file.
-// Format: timestamp\x1Fcwd\x1Fcommand
-func parseCaptureFileLine(line string) (CapturedCommand, error) {
-	// Split by unit separator (0x1F)
-	parts := splitByUnitSeparator(line)
-	if len(parts) != 3 {
-		return CapturedCommand{}, fmt.Errorf("invalid capture line format")
-	}
-
-	var ts int64
-	fmt.Sscanf(parts[0], "%d", &ts)
-
-	return CapturedCommand{
-		Timestamp: ts,
-		CWD:       parts[1],
-		Command:   parts[2],
-	}, nil
-}
-
-// splitByUnitSeparator splits a string by the ASCII unit separator (0x1F).
-func splitByUnitSeparator(s string) []string {
-	var result []string
-	var current strings.Builder
-
-	for _, r := range s {
-		if r == '\x1F' {
-			result = append(result, current.String())
-			current.Reset()
-		} else {
-			current.WriteRune(r)
-		}
-	}
-
-	// Add the last part
-	result = append(result, current.String())
-
-	return result
-}
-
-// getExitCode extracts the exit code from an exec.ExitError.
-func getExitCode(err *exec.ExitError) int {
-	if status, ok := err.Sys().(syscall.WaitStatus); ok {
-		return status.ExitStatus()
-	}
-	return 1
-}

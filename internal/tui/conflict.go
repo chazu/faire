@@ -413,7 +413,7 @@ func (m *ConflictResolverModel) resolveConflict(filePath, strategy string) {
 	// If using ours/theirs, need to add the file
 	if strategy == "ours" || strategy == "theirs" {
 		cmd = exec.Command("git", "add", filePath)
-		cmd.Run()
+		_ = cmd.Run()
 	}
 
 	// Go back to file list
@@ -521,5 +521,5 @@ func (d conflictFileDelegate) Render(w io.Writer, m list.Model, index int, listI
 		text = normalStyle.Render("  " + c.Title())
 	}
 
-	fmt.Fprint(w, text)
+	_, _ = fmt.Fprint(w, text)
 }

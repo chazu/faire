@@ -113,7 +113,7 @@ func (d *DangerInfo) Confirm() (bool, error) {
 	fmt.Print("\nContinue? [y/N]: ")
 
 	var response string
-	fmt.Scanln(&response)
+	_, _ = fmt.Scanln(&response)
 
 	response = strings.ToLower(strings.TrimSpace(response))
 	return response == "y" || response == "yes", nil

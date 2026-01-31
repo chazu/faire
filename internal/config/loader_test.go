@@ -135,16 +135,16 @@ func TestEnvOverrides_String(t *testing.T) {
 	oldEnv := saveEnv()
 	defer restoreEnv(oldEnv)
 
-	os.Setenv("GITSAVVY_REPO_PATH", "/env/override/repo")
-	os.Setenv("GITSAVVY_REPO_REMOTE", "env-origin")
-	os.Setenv("GITSAVVY_REPO_BRANCH", "env-branch")
-	os.Setenv("GITSAVVY_REPO_SYNC_STRATEGY", "ff-only")
-	os.Setenv("GITSAVVY_IDENTITY_PATH", "envuser")
-	os.Setenv("GITSAVVY_IDENTITY_MODE", "direct")
-	os.Setenv("GITSAVVY_GIT_AUTHOR_NAME", "Env Author")
-	os.Setenv("GITSAVVY_GIT_AUTHOR_EMAIL", "env@example.com")
-	os.Setenv("GITSAVVY_RUNNER_DEFAULT_SHELL", "bash")
-	os.Setenv("GITSAVVY_TUI_THEME", "dark")
+	_ = os.Setenv("GITSAVVY_REPO_PATH", "/env/override/repo")
+	_ = os.Setenv("GITSAVVY_REPO_REMOTE", "env-origin")
+	_ = os.Setenv("GITSAVVY_REPO_BRANCH", "env-branch")
+	_ = os.Setenv("GITSAVVY_REPO_SYNC_STRATEGY", "ff-only")
+	_ = os.Setenv("GITSAVVY_IDENTITY_PATH", "envuser")
+	_ = os.Setenv("GITSAVVY_IDENTITY_MODE", "direct")
+	_ = os.Setenv("GITSAVVY_GIT_AUTHOR_NAME", "Env Author")
+	_ = os.Setenv("GITSAVVY_GIT_AUTHOR_EMAIL", "env@example.com")
+	_ = os.Setenv("GITSAVVY_RUNNER_DEFAULT_SHELL", "bash")
+	_ = os.Setenv("GITSAVVY_TUI_THEME", "dark")
 
 	cfg := DefaultConfig()
 	applyEnvOverrides(cfg)
@@ -205,8 +205,8 @@ func TestEnvOverrides_Bool(t *testing.T) {
 			oldEnv := saveEnv()
 			defer restoreEnv(oldEnv)
 
-			os.Setenv("GITSAVVY_REPO_AUTO_REINDEX", tt.envValue)
-			os.Setenv("GITSAVVY_TUI_ENABLED", tt.envValue)
+			_ = os.Setenv("GITSAVVY_REPO_AUTO_REINDEX", tt.envValue)
+			_ = os.Setenv("GITSAVVY_TUI_ENABLED", tt.envValue)
 
 			cfg := DefaultConfig()
 			// Flip defaults to test override
@@ -230,8 +230,8 @@ func TestEnvOverrides_Int(t *testing.T) {
 	oldEnv := saveEnv()
 	defer restoreEnv(oldEnv)
 
-	os.Setenv("GITSAVVY_RUNNER_MAX_OUTPUT_LINES", "1000")
-	os.Setenv("GITSAVVY_WORKFLOWS_SCHEMA_VERSION", "2")
+	_ = os.Setenv("GITSAVVY_RUNNER_MAX_OUTPUT_LINES", "1000")
+	_ = os.Setenv("GITSAVVY_WORKFLOWS_SCHEMA_VERSION", "2")
 
 	cfg := DefaultConfig()
 	applyEnvOverrides(cfg)
@@ -250,8 +250,8 @@ func TestEnvOverrides_EmptyValue(t *testing.T) {
 	defer restoreEnv(oldEnv)
 
 	// Set to empty string - should NOT override
-	os.Setenv("GITSAVVY_REPO_PATH", "")
-	os.Setenv("GITSAVVY_IDENTITY_PATH", "")
+	_ = os.Setenv("GITSAVVY_REPO_PATH", "")
+	_ = os.Setenv("GITSAVVY_IDENTITY_PATH", "")
 
 	cfg := DefaultConfig()
 	originalPath := cfg.Repo.Path
@@ -291,7 +291,7 @@ path = "configuser"
 	defer restoreEnv(oldEnv)
 
 	// Set env override
-	os.Setenv("GITSAVVY_REPO_SYNC_STRATEGY", "merge")
+	_ = os.Setenv("GITSAVVY_REPO_SYNC_STRATEGY", "merge")
 
 	cfg, err := Load(configPath)
 	if err != nil {
@@ -327,13 +327,13 @@ func restoreEnv(env map[string]string) {
 	for _, kv := range os.Environ() {
 		if strings.HasPrefix(kv, "GITSAVVY_") {
 			key := strings.SplitN(kv, "=", 2)[0]
-			os.Unsetenv(key)
+			_ = os.Unsetenv(key)
 		}
 	}
 	// Restore saved values
 	for k, v := range env {
 		if strings.HasPrefix(k, "GITSAVVY_") {
-			os.Setenv(k, v)
+			_ = os.Setenv(k, v)
 		}
 	}
 }

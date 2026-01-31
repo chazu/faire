@@ -146,6 +146,7 @@ func (m RedactionModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
+		// nolint:staticcheck // QF1003 - tagged switch refactor would be complex, current pattern is clear
 		switch msg.String() {
 		case "ctrl+c", "q":
 			m.Canceled = true
@@ -182,6 +183,7 @@ func (m RedactionModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if len(m.List.Items()) > 0 {
 					// For now, just mark for manual edit
 					// TODO: Implement proper edit UI
+					_ = m.State // Placeholder for future implementation
 				}
 			}
 
@@ -463,7 +465,7 @@ func (d redactionDelegate) Render(w io.Writer, m list.Model, index int, listItem
 		text = normalStyle.Render("  " + r.Title())
 	}
 
-	fmt.Fprint(w, text)
+	_, _ = fmt.Fprint(w, text)
 }
 
 // detectSensitiveItems detects potential sensitive items in content.
@@ -477,16 +479,19 @@ func detectSensitiveItems(content string) []RedactedItem {
 	if strings.Contains(content, "api_key") || strings.Contains(content, "apiKey") {
 		// Extract key values
 		// This is a simplified detection
+		_ = items // TODO: implement extraction
 	}
 
 	// Look for passwords
 	if strings.Contains(content, "password") || strings.Contains(content, "PASS") {
 		// Extract password values
+		_ = items // TODO: implement extraction
 	}
 
 	// Look for tokens
 	if strings.Contains(content, "token") || strings.Contains(content, "TOKEN") {
 		// Extract token values
+		_ = items // TODO: implement extraction
 	}
 
 	// Look for emails

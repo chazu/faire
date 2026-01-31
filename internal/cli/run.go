@@ -196,6 +196,7 @@ func runNonInteractive(ctx context.Context, wf *workflows.Workflow, opts *RunOpt
 		if !opts.Yes {
 			// In non-yes mode, we'd prompt here
 			// For now, just continue
+			_ = opts.Yes // Placeholder for future implementation
 		}
 	}
 
@@ -215,18 +216,4 @@ func runInteractive(ctx context.Context, wf *workflows.Workflow, opts *RunOption
 	fmt.Println("(Interactive mode - TODO: integrate TUI runner)")
 	fmt.Println("Falling back to non-interactive mode with prompts...")
 	return runNonInteractive(ctx, wf, opts, cfg)
-}
-
-// extractPlaceholders extracts all placeholders from a workflow.
-func extractPlaceholders(wf interface{}) []string {
-	// TODO: Implement placeholder extraction
-	// For now, return empty
-	return []string{}
-}
-
-// findMissingPlaceholders finds placeholders that don't have values.
-func findMissingPlaceholders(params map[string]string, wf interface{}) []string {
-	// TODO: Implement missing placeholder detection
-	// For now, return empty
-	return []string{}
 }

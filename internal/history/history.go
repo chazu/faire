@@ -66,7 +66,7 @@ func (p *Parser) parseBash() ([]Command, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to open bash history: %w", err)
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	var commands []Command
 	var currentTimestamp int64
@@ -135,7 +135,7 @@ func (p *Parser) parseZsh() ([]Command, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to open zsh history: %w", err)
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	var commands []Command
 	scanner := bufio.NewScanner(file)
