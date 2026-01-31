@@ -6,15 +6,17 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
+	"gopkg.in/yaml.v3"
 
-	"github.com/chazuruo/svf/internal/config"
-	"github.com/chazuruo/svf/internal/gitrepo"
-	"github.com/chazuruo/svf/internal/tui"
-	"github.com/chazuruo/svf/internal/workflows"
-	"github.com/chazuruo/svf/internal/workflows/store"
+	"github.com/chazuruo/faire/internal/config"
+	"github.com/chazuruo/faire/internal/gitrepo"
+	"github.com/chazuruo/faire/internal/tui"
+	"github.com/chazuruo/faire/internal/workflows"
+	"github.com/chazuruo/faire/internal/workflows/store"
 )
 
 // EditOptions contains the options for the edit command.
@@ -23,6 +25,7 @@ type EditOptions struct {
 	WorkflowID string
 	OutputPath string
 	NoCommit   bool
+	TUI        bool
 	NoTUI      bool   // For LLM automation
 	InputFile  string // For --no-tui mode
 }
@@ -32,16 +35,17 @@ func NewEditCommand() *cobra.Command {
 	opts := &EditOptions{}
 
 	cmd := &cobra.Command{
-		Use:   "edit",
-		Short: "Create or edit workflows using the TUI editor",
-		Long: `Launch the terminal UI editor for creating and editing workflows.
+		Use:   "edit [workflow-ref]",
+		Short: "Create or edit workflows using the TUI or external editor",
+		Long: `Create or edit workflows using the TUI editor or external editor (EDITOR env var).
 
-The edit command opens a full-screen TUI editor where you can:
-- Create new workflows
-- Edit existing workflows
-- Add, remove, and reorder steps
-- Configure placeholders for user input
-- Save workflows with automatic YAML generation
+The edit command opens a workflow for editing:
+- With --tui: Uses the terminal UI editor
+- Without --tui: Opens in your $EDITOR (vi, nano, code, etc.)
+
+The workflow reference can be:
+- A workflow ID (ULID) or slug
+- Omitted to create a new workflow
 
 In non-TUI mode (--no-tui), you can import workflows from YAML files:
 - Use --file to specify a YAML file to import
@@ -54,23 +58,27 @@ Examples:
   faire edit --output /path/save.yaml  # Save to specific path (TUI mode)
   faire edit --no-tui --file workflow.yaml  # Import from file (non-TUI)
   cat workflow.yaml | faire edit --no-tui  # Import from stdin (non-TUI)`,
+		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if len(args) > 0 {
+				opts.WorkflowID = args[0]
+			}
 			return runEdit(opts)
 		},
 	}
 
 	cmd.Flags().StringVar(&opts.ConfigPath, "config", "", "config file path")
-	cmd.Flags().StringVar(&opts.WorkflowID, "workflow", "", "workflow ID to edit (creates new if empty)")
 	cmd.Flags().StringVar(&opts.OutputPath, "output", "", "output path for workflow.yaml")
 	cmd.Flags().StringVar(&opts.InputFile, "file", "", "input YAML file (for --no-tui mode)")
 	cmd.Flags().BoolVar(&opts.NoCommit, "no-commit", false, "skip git commit after saving")
 	cmd.Flags().BoolVar(&opts.NoTUI, "no-tui", false, "disable TUI/interactive mode (use with --file)")
+	cmd.Flags().BoolVar(&opts.TUI, "tui", true, "use TUI editor (default true)")
 
 	return cmd
 }
 
 func runEdit(opts *EditOptions) error {
-	// Check for --no-tui mode
+	// Check for --no-tui mode first
 	if IsNoTUI() || opts.NoTUI {
 		return runEditNonInteractive(opts)
 	}
@@ -142,25 +150,36 @@ func runEditInteractive(opts *EditOptions) error {
 		}
 	}
 
-	// Launch TUI editor
-	editor := tui.NewWorkflowEditor(ctx, wf)
-	p := tea.NewProgram(editor, tea.WithAltScreen())
+	var editedWf *workflows.Workflow
 
-	finalModel, err := p.Run()
-	if err != nil {
-		return fmt.Errorf("failed to run TUI: %w", err)
+	// Choose editor based on flag
+	if opts.TUI {
+		// Launch TUI editor
+		editor := tui.NewWorkflowEditor(ctx, wf)
+		p := tea.NewProgram(editor, tea.WithAltScreen())
+
+		finalModel, err := p.Run()
+		if err != nil {
+			return fmt.Errorf("failed to run TUI: %w", err)
+		}
+
+		finalEditor := finalModel.(tui.WorkflowEditorModel)
+
+		// Handle quit without save
+		if finalEditor.DidQuit() {
+			fmt.Println("Quit without saving.")
+			return nil
+		}
+
+		// Get the edited workflow
+		editedWf = finalEditor.GetWorkflow()
+	} else {
+		// Launch external editor
+		editedWf, err = launchExternalEditor(wf)
+		if err != nil {
+			return fmt.Errorf("editor failed: %w", err)
+		}
 	}
-
-	finalEditor := finalModel.(tui.WorkflowEditorModel)
-
-	// Handle quit without save
-	if finalEditor.DidQuit() {
-		fmt.Println("Quit without saving.")
-		return nil
-	}
-
-	// Get the edited workflow
-	editedWf := finalEditor.GetWorkflow()
 
 	// Validate workflow
 	if err := editedWf.Validate(); err != nil {
@@ -217,7 +236,7 @@ func runEditNonInteractive(opts *EditOptions) error {
 	// Open repo
 	repo := gitrepo.New(cfg.Repo.Path)
 	if !repo.IsInitialized(ctx) {
-		return fmt.Errorf("repository not initialized. Run 'svf init' first")
+		return fmt.Errorf("repository not initialized. Run 'faire init' first")
 	}
 
 	// Create store
@@ -279,4 +298,87 @@ func runEditNonInteractive(opts *EditOptions) error {
 	}
 
 	return nil
+}
+
+// launchExternalEditor launches an external editor to edit the workflow.
+func launchExternalEditor(wf *workflows.Workflow) (*workflows.Workflow, error) {
+	// Create temp file
+	tmp, err := os.CreateTemp("", "faire-edit-*.yaml")
+	if err != nil {
+		return nil, fmt.Errorf("failed to create temp file: %w", err)
+	}
+	defer os.Remove(tmp.Name())
+
+	// Write workflow to temp file
+	data, err := workflows.MarshalWorkflow(wf)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal workflow: %w", err)
+	}
+
+	if _, err := tmp.Write(data); err != nil {
+		return nil, fmt.Errorf("failed to write temp file: %w", err)
+	}
+
+	tmp.Close()
+
+	// Get editor from environment
+	editor := os.Getenv("EDITOR")
+	if editor == "" {
+		editor = "vi"
+	}
+
+	// Get modified time before editing
+	infoBefore, err := os.Stat(tmp.Name())
+	if err != nil {
+		return nil, fmt.Errorf("failed to stat temp file: %w", err)
+	}
+
+	// Launch editor
+	fmt.Printf("Launching %s...\n", editor)
+	if err := launchEditor(editor, tmp.Name()); err != nil {
+		return nil, fmt.Errorf("editor failed: %w", err)
+	}
+
+	// Check if file was modified
+	infoAfter, err := os.Stat(tmp.Name())
+	if err != nil {
+		return nil, fmt.Errorf("failed to stat temp file: %w", err)
+	}
+
+	// If not modified, return original
+	if infoAfter.ModTime().Equal(infoBefore.ModTime()) {
+		fmt.Println("No changes made.")
+		return wf, nil
+	}
+
+	// Read back and validate
+	updatedData, err := os.ReadFile(tmp.Name())
+	if err != nil {
+		return nil, fmt.Errorf("failed to read temp file: %w", err)
+	}
+
+	var updated workflows.Workflow
+	if err := yaml.Unmarshal(updatedData, &updated); err != nil {
+		return nil, fmt.Errorf("invalid YAML: %w", err)
+	}
+
+	if err := updated.Validate(); err != nil {
+		return nil, fmt.Errorf("validation failed: %w", err)
+	}
+
+	return &updated, nil
+}
+
+// launchEditor launches the editor with the given file.
+func launchEditor(editor, path string) error {
+	// For VS Code and similar GUI editors, we need to wait
+	// This is a simplified implementation
+	// In production, you'd handle this more carefully
+
+	cmd := exec.Command("sh", "-c", editor+" "+path)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	return cmd.Run()
 }

@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/chazuruo/svf/internal/config"
-	"github.com/chazuruo/svf/internal/workflows"
+	"github.com/chazuruo/faire/internal/config"
+	"github.com/chazuruo/faire/internal/workflows"
 )
 
 const (
@@ -34,6 +34,21 @@ type WorkflowEntry struct {
 	Tags       []string `json:"tags"`
 	UpdatedAt  string   `json:"updated_at"`
 	SearchText string   `json:"search_text"` // Concatenated searchable text
+}
+
+// SearchOptions defines options for searching the index.
+type SearchOptions struct {
+	Query        string
+	Tags         []string
+	IdentityPath string
+	Limit        int
+}
+
+// SearchResult represents a search result with ranking.
+type SearchResult struct {
+	Entry   WorkflowEntry
+	Score   float64
+	Matches []string // Matched field names
 }
 
 // Builder builds and maintains the search index.
@@ -403,26 +418,9 @@ func (i *Index) FilterByPath(prefix string) []WorkflowEntry {
 	return results
 }
 
-// SearchResult represents a search result with ranking.
-type SearchResult struct {
-	Entry   WorkflowEntry
-	Score   float64
-	Matches []string // Matched field names
-}
-
-// SearchOptions contains search options.
-type SearchOptions struct {
-	Query        string
-	Tags         []string // Filter by tags
-	IdentityPath string   // Filter by identity path (e.g., "platform/chaz")
-	Mine         bool     // Filter by identity path only (user's workflows)
-	Shared       bool     // Filter by shared workflows only
-	MaxResults   int      // Limit results (0 for no limit)
-}
-
 // FuzzySearch performs fuzzy search with ranking and filtering.
 func (i *Index) FuzzySearch(opts SearchOptions) []SearchResult {
-	if opts.Query == "" && len(opts.Tags) == 0 && opts.IdentityPath == "" && !opts.Mine && !opts.Shared {
+	if opts.Query == "" && len(opts.Tags) == 0 && opts.IdentityPath == "" {
 		// No filters, return all with basic scoring
 		results := make([]SearchResult, len(i.Workflows))
 		for j, entry := range i.Workflows {
@@ -449,21 +447,6 @@ func (i *Index) FuzzySearch(opts SearchOptions) []SearchResult {
 			// Identity path is everything except the last two parts (slug, filename)
 			entryIdentityPath := filepath.Join(pathParts[:len(pathParts)-2]...)
 			if entryIdentityPath != opts.IdentityPath {
-				continue
-			}
-		}
-
-		// Apply --mine filter (only user's workflows from workflows/ directory)
-		if opts.Mine && opts.IdentityPath == "" {
-			// Filter out shared workflows
-			if strings.HasPrefix(entry.Path, "shared/") {
-				continue
-			}
-		}
-
-		// Apply --shared filter (only shared workflows)
-		if opts.Shared {
-			if !strings.HasPrefix(entry.Path, "shared/") {
 				continue
 			}
 		}
@@ -506,8 +489,8 @@ func (i *Index) FuzzySearch(opts SearchOptions) []SearchResult {
 	})
 
 	// Apply max results limit
-	if opts.MaxResults > 0 && len(results) > opts.MaxResults {
-		results = results[:opts.MaxResults]
+	if opts.Limit > 0 && len(results) > opts.Limit {
+		results = results[:opts.Limit]
 	}
 
 	return results
