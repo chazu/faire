@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -11,6 +12,19 @@ import (
 	"github.com/chazuruo/svf/internal/gitrepo"
 	"github.com/chazuruo/svf/internal/workflows"
 )
+
+// setupGitConfig configures git user.name and user.email for testing.
+func setupGitConfig(tmpDir string) {
+	ctx := context.Background()
+	// Set git config for the test repository
+	cmd := exec.CommandContext(ctx, "git", "config", "user.email", "test@example.com")
+	cmd.Dir = tmpDir
+	_ = cmd.Run()
+
+	cmd = exec.CommandContext(ctx, "git", "config", "user.name", "Test User")
+	cmd.Dir = tmpDir
+	_ = cmd.Run()
+}
 
 // setupTestRepo creates a temporary Git repository for testing.
 func setupTestRepo(t *testing.T) (string, gitrepo.Repo, *config.Config) {
@@ -136,6 +150,9 @@ func TestFileSystemStore_Save(t *testing.T) {
 
 	t.Run("save with auto-commit", func(t *testing.T) {
 		wf := makeTestWorkflow("Commit Test", makeTestStep("true"))
+
+		// Setup git config for commits
+		setupGitConfig(repo.Path())
 
 		// Create an initial commit first so HEAD exists
 		initialFile := filepath.Join(repo.Path(), "initial.txt")
