@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/chazuruo/faire/internal/cli"
 	"github.com/spf13/cobra"
 )
 
@@ -29,6 +30,9 @@ but stores all workflows and metadata in a Git repository instead of a hosted ba
 	}
 
 	rootCmd.CompletionOptions.DisableDefaultCmd = true
+
+	// Add subcommands
+	rootCmd.AddCommand(cli.NewWhoamiCommand())
 
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)
