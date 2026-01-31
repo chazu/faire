@@ -37,6 +37,9 @@ but stores all workflows and metadata in a Git repository instead of a hosted ba
 	// Add subcommands
 	rootCmd.AddCommand(cli.NewWhoamiCommand())
 	rootCmd.AddCommand(cli.NewEditCommand())
+	rootCmd.AddCommand(cli.NewInitCommand())
+	rootCmd.AddCommand(cli.NewRecordCommand())
+	rootCmd.AddCommand(cli.NewRecordHistoryCommand())
 
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)
