@@ -1,0 +1,67 @@
+# goreleaser configuration for svf
+# This file defines how svf releases are built and distributed
+
+project_name: svf
+
+before:
+  hooks:
+    - go mod tidy
+    - go mod verify
+
+builds:
+  - env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+      - -X main.Version={{.Version}}
+      - -X main.Commit={{.Commit}}
+      - -X main.Date={{.Date}}
+    main: ./cmd/svf
+    binary: svf
+
+archives:
+  - format: tar.gz
+    format_overrides:
+      - goos: windows
+        format: zip
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    wrap_in_directory: false
+    files:
+      - LICENSE*
+      - README*
+      - LICENSES/**
+
+checksum:
+  name_template: "{{ .ProjectName }}_{{ .Version }}_checksums.txt"
+  algorithm: sha256
+
+release:
+  github:
+    owner: chazu
+    name: faire
+  draft: false
+  prerelease: auto
+  mode: replace
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^ci:"
+
+# Generate snapshot releases for non-tagged commits
+snapshot:
+  name_template: "{{ incpatch .Version }}-next"
+
+# Monitor for long build times
+monitors:
+  - enabled: true

@@ -47,6 +47,7 @@ but stores all workflows and metadata in a Git repository instead of a hosted ba
 	rootCmd.AddCommand(cli.NewRunCommand())
 	rootCmd.AddCommand(cli.NewSearchCommand())
 	rootCmd.AddCommand(cli.NewAskCommand())
+	rootCmd.AddCommand(cli.NewUpgradeCommand())
 	rootCmd.AddCommand(cli.NewVersionCommand())
 
 	if err := rootCmd.Execute(); err != nil {

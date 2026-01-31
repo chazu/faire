@@ -174,7 +174,7 @@ func (r *runner) executeStep(ctx context.Context, stepIndex int, command, shell,
 
 	// Set environment
 	if len(env) > 0 {
-		cmd.Env = append(os.Environ())
+		cmd.Env = append([]string{}, os.Environ()...)
 		for k, v := range env {
 			cmd.Env = append(cmd.Env, fmt.Sprintf("%s=%s", k, v))
 		}
