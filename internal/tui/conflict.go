@@ -8,10 +8,20 @@ import (
 	"os/exec"
 	"strings"
 
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/bubbles/viewport"
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+)
+
+// DiffViewMode controls how diffs are displayed.
+type DiffViewMode int
+
+const (
+	// DiffViewUnified shows a unified diff with conflict markers.
+	DiffViewUnified DiffViewMode = iota
+	// DiffViewSideBySide shows ours and theirs side by side.
+	DiffViewSideBySide
 )
 
 // ConflictResolverModel is a Bubble Tea model for resolving merge conflicts.
@@ -25,14 +35,32 @@ type ConflictResolverModel struct {
 	// DiffContent is the diff content for the current file.
 	DiffContent string
 
+	// OursContent is the "ours" version of the file.
+	OursContent string
+
+	// TheirsContent is the "theirs" version of the file.
+	TheirsContent string
+
+	// BaseContent is the common ancestor version (optional).
+	BaseContent string
+
+	// DiffMode controls how diffs are displayed.
+	DiffMode DiffViewMode
+
 	// State is the current resolution state.
 	State ResolutionState
 
 	// List is the file list component.
 	List list.Model
 
-	// Viewport is the diff viewer.
+	// Viewport is the diff viewer (for unified view).
 	Viewport viewport.Model
+
+	// OursViewport is the "ours" diff viewer (for side-by-side).
+	OursViewport viewport.Model
+
+	// TheirsViewport is the "theirs" diff viewer (for side-by-side).
+	TheirsViewport viewport.Model
 
 	// Resolved indicates which files have been resolved.
 	Resolved map[string]bool
@@ -44,11 +72,12 @@ type ConflictResolverModel struct {
 	Aborted bool
 
 	// styles
-	normalStyle    lipgloss.Style
-	selectedStyle  lipgloss.Style
-	oursStyle      lipgloss.Style
-	theirsStyle    lipgloss.Style
-	headerStyle    lipgloss.Style
+	normalStyle   lipgloss.Style
+	selectedStyle lipgloss.Style
+	oursStyle     lipgloss.Style
+	theirsStyle   lipgloss.Style
+	headerStyle   lipgloss.Style
+	markerStyle   lipgloss.Style
 
 	// width and height
 	width  int
@@ -84,8 +113,10 @@ func NewConflictResolverModel(conflictedFiles []string) ConflictResolverModel {
 	l.SetShowHelp(false)
 	l.Title = "Conflicted Files"
 
-	// Create viewport
+	// Create viewports
 	vp := viewport.New(80, 20)
+	oursVp := viewport.New(40, 20)
+	theirsVp := viewport.New(40, 20)
 
 	// Styles
 	normalStyle := lipgloss.NewStyle().
@@ -102,19 +133,26 @@ func NewConflictResolverModel(conflictedFiles []string) ConflictResolverModel {
 	headerStyle := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("86")).
 		Bold(true)
+	markerStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("196")).
+		Bold(true)
 
 	return ConflictResolverModel{
 		ConflictedFiles: conflictedFiles,
 		CurrentFile:     0,
-		State:          ConflictStateSelecting,
-		List:           l,
-		Viewport:       vp,
-		Resolved:       make(map[string]bool),
-		normalStyle:    normalStyle,
-		selectedStyle:  selectedStyle,
-		oursStyle:      oursStyle,
-		theirsStyle:    theirsStyle,
-		headerStyle:    headerStyle,
+		State:           ConflictStateSelecting,
+		List:            l,
+		Viewport:        vp,
+		OursViewport:    oursVp,
+		TheirsViewport:  theirsVp,
+		Resolved:        make(map[string]bool),
+		DiffMode:        DiffViewUnified,
+		normalStyle:     normalStyle,
+		selectedStyle:   selectedStyle,
+		oursStyle:       oursStyle,
+		theirsStyle:     theirsStyle,
+		headerStyle:     headerStyle,
+		markerStyle:     markerStyle,
 	}
 }
 
@@ -179,6 +217,16 @@ func (m ConflictResolverModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				// Go back to file list
 				m.State = ConflictStateSelecting
 			}
+
+		case "v":
+			if m.State == ConflictStateResolving {
+				// Toggle diff view mode
+				if m.DiffMode == DiffViewUnified {
+					m.DiffMode = DiffViewSideBySide
+				} else {
+					m.DiffMode = DiffViewUnified
+				}
+			}
 		}
 
 	case tea.WindowSizeMsg:
@@ -186,6 +234,10 @@ func (m ConflictResolverModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.height = msg.Height
 		m.Viewport.Width = msg.Width - 40
 		m.Viewport.Height = msg.Height - 10
+		m.OursViewport.Width = (msg.Width - 50) / 2
+		m.OursViewport.Height = msg.Height - 10
+		m.TheirsViewport.Width = (msg.Width - 50) / 2
+		m.TheirsViewport.Height = msg.Height - 10
 	}
 
 	// Update child components
@@ -201,6 +253,18 @@ func (m ConflictResolverModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	m.Viewport, vpCmd = m.Viewport.Update(msg)
 	if vpCmd != nil {
 		cmds = append(cmds, vpCmd)
+	}
+
+	var oursVpCmd tea.Cmd
+	m.OursViewport, oursVpCmd = m.OursViewport.Update(msg)
+	if oursVpCmd != nil {
+		cmds = append(cmds, oursVpCmd)
+	}
+
+	var theirsVpCmd tea.Cmd
+	m.TheirsViewport, theirsVpCmd = m.TheirsViewport.Update(msg)
+	if theirsVpCmd != nil {
+		cmds = append(cmds, theirsVpCmd)
 	}
 
 	return m, tea.Batch(cmds...)
@@ -277,9 +341,17 @@ func (m ConflictResolverModel) resolveView() string {
 
 // diffView renders the diff content.
 func (m ConflictResolverModel) diffView() string {
+	if m.DiffMode == DiffViewSideBySide {
+		return m.sideBySideDiffView()
+	}
+	return m.unifiedDiffView()
+}
+
+// unifiedDiffView renders the unified diff with conflict markers.
+func (m ConflictResolverModel) unifiedDiffView() string {
 	var b strings.Builder
 
-	b.WriteString(" Diff Viewer\n\n")
+	b.WriteString(" Diff Viewer (Unified) [v] Toggle view\n\n")
 
 	if m.DiffContent != "" {
 		m.Viewport.SetContent(m.DiffContent)
@@ -301,6 +373,51 @@ func (m ConflictResolverModel) diffView() string {
 		Render(b.String())
 }
 
+// sideBySideDiffView renders ours and theirs side by side.
+func (m ConflictResolverModel) sideBySideDiffView() string {
+	var b strings.Builder
+
+	b.WriteString(" Diff Viewer (Side-by-Side) [v] Toggle view\n\n")
+
+	// Set content for both viewports
+	if m.OursContent != "" {
+		m.OursViewport.SetContent(m.oursStyle.Render("OURS (Your Changes)\n\n") + m.OursContent)
+	} else {
+		m.OursViewport.SetContent("Loading...")
+	}
+
+	if m.TheirsContent != "" {
+		m.TheirsViewport.SetContent(m.theirsStyle.Render("THEIRS (Their Changes)\n\n") + m.TheirsContent)
+	} else {
+		m.TheirsViewport.SetContent("Loading...")
+	}
+
+	// Render side by side
+	oursPanel := m.OursViewport.View()
+	theirsPanel := m.TheirsViewport.View()
+
+	panelWidth := (m.width - 50) / 2
+	if panelWidth < 30 {
+		panelWidth = 30
+	}
+
+	oursStyled := lipgloss.NewStyle().
+		Width(panelWidth).
+		Height(m.height - 10).
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("green")).
+		Render(oursPanel)
+
+	theirsStyled := lipgloss.NewStyle().
+		Width(panelWidth).
+		Height(m.height - 10).
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("blue")).
+		Render(theirsPanel)
+
+	return lipgloss.JoinHorizontal(lipgloss.Top, oursStyled, theirsStyled)
+}
+
 // actionsView renders the resolution actions.
 func (m ConflictResolverModel) actionsView() string {
 	var b strings.Builder
@@ -312,6 +429,8 @@ func (m ConflictResolverModel) actionsView() string {
 	b.WriteString("  [t] Accept 'theirs' (their changes)")
 	b.WriteString("\n\n")
 	b.WriteString("  [m] Manual edit (opens mg)")
+	b.WriteString("\n\n")
+	b.WriteString("  [v] Toggle diff view")
 	b.WriteString("\n\n")
 	b.WriteString("  [a] Abort resolution")
 	b.WriteString("\n\n")
@@ -365,25 +484,112 @@ func (m ConflictResolverModel) finishedView() string {
 
 // loadDiffForFile loads the diff content for a conflicted file.
 func (m *ConflictResolverModel) loadDiffForFile(filePath string) {
-	// Use git diff to show the conflict
-	// This shows the conflict markers
-	cmd := exec.Command("git", "diff", "--ours", filePath)
-	oursOutput, _ := cmd.Output()
+	// Read the actual conflicted file content
+	content, err := os.ReadFile(filePath)
+	if err != nil {
+		m.DiffContent = fmt.Sprintf("Error reading file: %v", err)
+		m.OursContent = m.DiffContent
+		m.TheirsContent = ""
+		return
+	}
 
-	cmd = exec.Command("git", "diff", "--theirs", filePath)
-	theirsOutput, _ := cmd.Output()
+	// Parse conflict markers for unified view
+	m.DiffContent = m.formatUnifiedDiff(string(content))
 
-	// Build diff content with conflict markers
-	var diff strings.Builder
-	diff.WriteString("<<<<<<< HEAD (your changes)\n")
-	diff.WriteString(string(oursOutput))
-	diff.WriteString("\n=======\n")
-	diff.WriteString(string(theirsOutput))
-	diff.WriteString("\n>>>>>>> (their changes)\n")
+	// Get ours and theirs versions for side-by-side view
+	m.OursContent = m.getOursVersion(filePath)
+	m.TheirsContent = m.getTheirsVersion(filePath)
 
-	m.DiffContent = diff.String()
+	// Reset viewport to top
 	m.Viewport.SetContent(m.DiffContent)
 	m.Viewport.GotoTop()
+	m.OursViewport.SetContent(m.OursContent)
+	m.OursViewport.GotoTop()
+	m.TheirsViewport.SetContent(m.TheirsContent)
+	m.TheirsViewport.GotoTop()
+}
+
+// formatUnifiedDiff formats the conflicted content with highlighted markers.
+func (m *ConflictResolverModel) formatUnifiedDiff(content string) string {
+	lines := strings.Split(content, "\n")
+	var result strings.Builder
+
+	inOurs := false
+	inTheirs := false
+
+	for i, line := range lines {
+		// Detect conflict markers
+		if strings.HasPrefix(line, "<<<<<<<") {
+			inOurs = true
+			result.WriteString(m.markerStyle.Render(line))
+			result.WriteString("\n")
+			continue
+		}
+		if strings.HasPrefix(line, "=======") && (inOurs || inTheirs) {
+			inOurs = false
+			inTheirs = true
+			result.WriteString(m.markerStyle.Render(line))
+			result.WriteString("\n")
+			continue
+		}
+		if strings.HasPrefix(line, ">>>>>>>") {
+			inTheirs = false
+			result.WriteString(m.markerStyle.Render(line))
+			result.WriteString("\n")
+			continue
+		}
+
+		// Style content based on section
+		if inOurs {
+			result.WriteString(m.oursStyle.Render(fmt.Sprintf("%4d | %s", i+1, line)))
+		} else if inTheirs {
+			result.WriteString(m.theirsStyle.Render(fmt.Sprintf("%4d | %s", i+1, line)))
+		} else {
+			result.WriteString(m.normalStyle.Render(fmt.Sprintf("%4d | %s", i+1, line)))
+		}
+		result.WriteString("\n")
+	}
+
+	return result.String()
+}
+
+// getOursVersion extracts the "ours" version of the file.
+func (m *ConflictResolverModel) getOursVersion(filePath string) string {
+	// Use git show to get our version
+	cmd := exec.Command("git", "show", ":2:"+filePath)
+	output, err := cmd.Output()
+	if err != nil {
+		return fmt.Sprintf("Error loading ours: %v", err)
+	}
+
+	return m.formatWithLineNumbers(string(output))
+}
+
+// getTheirsVersion extracts the "theirs" version of the file.
+func (m *ConflictResolverModel) getTheirsVersion(filePath string) string {
+	// Use git show to get their version
+	cmd := exec.Command("git", "show", ":3:"+filePath)
+	output, err := cmd.Output()
+	if err != nil {
+		return fmt.Sprintf("Error loading theirs: %v", err)
+	}
+
+	return m.formatWithLineNumbers(string(output))
+}
+
+// formatWithLineNumbers adds line numbers to content.
+func (m *ConflictResolverModel) formatWithLineNumbers(content string) string {
+	lines := strings.Split(content, "\n")
+	var result strings.Builder
+
+	for i, line := range lines {
+		result.WriteString(fmt.Sprintf("%4d | %s", i+1, line))
+		if i < len(lines)-1 {
+			result.WriteString("\n")
+		}
+	}
+
+	return result.String()
 }
 
 // resolveConflict resolves a conflict using the specified strategy.
@@ -494,8 +700,8 @@ func (c conflictFileItem) Description() string {
 // conflictFileDelegate defines how files are rendered in the list.
 type conflictFileDelegate struct{}
 
-func (d conflictFileDelegate) Height() int { return 1 }
-func (d conflictFileDelegate) Spacing() int  { return 0 }
+func (d conflictFileDelegate) Height() int  { return 1 }
+func (d conflictFileDelegate) Spacing() int { return 0 }
 func (d conflictFileDelegate) Update(msg tea.Msg, m *list.Model) tea.Cmd {
 	return nil
 }
@@ -522,4 +728,55 @@ func (d conflictFileDelegate) Render(w io.Writer, m list.Model, index int, listI
 	}
 
 	_, _ = fmt.Fprint(w, text)
+}
+
+// ConflictResolverResult is the result of running the conflict resolver.
+type ConflictResolverResult struct {
+	// Aborted indicates if the user aborted the resolution.
+	Aborted bool
+
+	// ResolvedCount is the number of files resolved.
+	ResolvedCount int
+
+	// TotalCount is the total number of conflicted files.
+	TotalCount int
+}
+
+// RunConflictResolver runs the conflict resolver TUI.
+// Returns the result of the resolution session.
+func RunConflictResolver(conflictedFiles []string) (*ConflictResolverResult, error) {
+	if len(conflictedFiles) == 0 {
+		return &ConflictResolverResult{
+			Aborted:       false,
+			ResolvedCount: 0,
+			TotalCount:    0,
+		}, nil
+	}
+
+	// Create the model
+	model := NewConflictResolverModel(conflictedFiles)
+
+	// Create the program
+	p := tea.NewProgram(model, tea.WithAltScreen())
+
+	// Run the program
+	finalModel, err := p.Run()
+	if err != nil {
+		return nil, fmt.Errorf("failed to run conflict resolver: %w", err)
+	}
+
+	// Extract the result
+	result := finalModel.(ConflictResolverModel)
+	resolvedCount := 0
+	for _, file := range conflictedFiles {
+		if result.Resolved[file] {
+			resolvedCount++
+		}
+	}
+
+	return &ConflictResolverResult{
+		Aborted:       result.Aborted,
+		ResolvedCount: resolvedCount,
+		TotalCount:    len(conflictedFiles),
+	}, nil
 }

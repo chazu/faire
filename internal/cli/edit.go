@@ -9,6 +9,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
+
 	"github.com/chazuruo/svf/internal/config"
 	"github.com/chazuruo/svf/internal/gitrepo"
 	"github.com/chazuruo/svf/internal/tui"
@@ -22,7 +23,7 @@ type EditOptions struct {
 	WorkflowID string
 	OutputPath string
 	NoCommit   bool
-	NoTUI      bool // For LLM automation
+	NoTUI      bool   // For LLM automation
 	InputFile  string // For --no-tui mode
 }
 
@@ -42,10 +43,17 @@ The edit command opens a full-screen TUI editor where you can:
 - Configure placeholders for user input
 - Save workflows with automatic YAML generation
 
+In non-TUI mode (--no-tui), you can import workflows from YAML files:
+- Use --file to specify a YAML file to import
+- Use --output to save to a specific path
+- Use --no-commit to skip automatic git commit
+
 Examples:
-  faire edit                    # Create a new workflow
-  faire edit --workflow my-id   # Edit existing workflow by ID
-  faire edit --output /path/save.yaml  # Save to specific path`,
+  faire edit                    # Create a new workflow (TUI mode)
+  faire edit --workflow my-id   # Edit existing workflow by ID (TUI mode)
+  faire edit --output /path/save.yaml  # Save to specific path (TUI mode)
+  faire edit --no-tui --file workflow.yaml  # Import from file (non-TUI)
+  cat workflow.yaml | faire edit --no-tui  # Import from stdin (non-TUI)`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runEdit(opts)
 		},
@@ -56,6 +64,7 @@ Examples:
 	cmd.Flags().StringVar(&opts.OutputPath, "output", "", "output path for workflow.yaml")
 	cmd.Flags().StringVar(&opts.InputFile, "file", "", "input YAML file (for --no-tui mode)")
 	cmd.Flags().BoolVar(&opts.NoCommit, "no-commit", false, "skip git commit after saving")
+	cmd.Flags().BoolVar(&opts.NoTUI, "no-tui", false, "disable TUI/interactive mode (use with --file)")
 
 	return cmd
 }

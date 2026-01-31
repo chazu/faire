@@ -280,18 +280,42 @@ func runInteractive(ctx context.Context, wf *workflows.Workflow, opts *RunOption
 		params[k] = v
 	}
 
+	// Handle --from and --until options by filtering steps
+	steps := wf.Steps
+	startIdx := 0
+	endIdx := len(steps)
+
+	if opts.From != "" {
+		for i, step := range steps {
+			if step.Name == opts.From {
+				startIdx = i
+				break
+			}
+		}
+	}
+
+	if opts.Until != "" {
+		for i, step := range steps {
+			if step.Name == opts.Until {
+				endIdx = i
+				break
+			}
+		}
+	}
+
+	// Create a filtered workflow for execution
+	filteredWf := *wf
+	filteredWf.Steps = steps[startIdx:endIdx]
+
 	// Create execution plan
 	plan := runner.Plan{
-		Workflow:   wf,
+		Workflow:   &filteredWf,
 		Parameters: params,
 		RepoRoot:   cfg.Repo.Path,
 	}
 
-	// Create danger checker
-	dangerChecker := runner.NewDangerChecker(cfg.Runner.DangerousCommandWarnings)
-
-	// Create TUI runner model
-	model := tui.NewRunnerModel(plan, dangerChecker, false, cfg.Runner.StreamOutput)
+	// Create TUI runner model with full config support
+	model := tui.NewRunnerModelWithConfig(plan, cfg)
 
 	// Run the TUI
 	p := tea.NewProgram(model)

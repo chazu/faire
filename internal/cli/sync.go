@@ -7,10 +7,11 @@ import (
 	"os"
 	"os/exec"
 
-	"github.com/spf13/cobra"
 	"github.com/chazuruo/svf/internal/config"
 	"github.com/chazuruo/svf/internal/gitrepo"
 	"github.com/chazuruo/svf/internal/index"
+	"github.com/chazuruo/svf/internal/tui"
+	"github.com/spf13/cobra"
 )
 
 // SyncOptions contains the options for the sync command.
@@ -131,12 +132,12 @@ func fetchRemote(ctx context.Context, repo gitrepo.Repo, remote string) error {
 
 // IntegrateResult contains the result of an integrate operation.
 type IntegrateResult struct {
-	FastForward    bool
-	Rebased        bool
-	Merged         bool
-	Conflicts      bool
-	NewCommits     int
-	ConflictFiles  []string
+	FastForward   bool
+	Rebased       bool
+	Merged        bool
+	Conflicts     bool
+	NewCommits    int
+	ConflictFiles []string
 }
 
 // integrateChanges integrates remote changes.
@@ -235,15 +236,37 @@ func resolveAllConflicts(ctx context.Context, repo gitrepo.Repo, strategy string
 
 // launchConflictResolver launches the TUI conflict resolver.
 func launchConflictResolver(ctx context.Context, repo gitrepo.Repo, result *IntegrateResult) error {
-	// TODO: Integrate with TUI conflict resolver model
-	// For now, show instructions
-	conflicts, _ := repo.GetConflicts(ctx)
-	fmt.Printf("\n%d conflict(s) detected:\n", len(conflicts))
-	for _, file := range conflicts {
-		fmt.Printf("  - %s\n", file)
+	conflicts, err := repo.GetConflicts(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to get conflicts: %w", err)
 	}
-	fmt.Println("\nPlease resolve conflicts manually, then run 'svf sync' again.")
-	fmt.Println("Or use --conflicts=ours or --conflicts=theirs to auto-resolve.")
+
+	if len(conflicts) == 0 {
+		return nil
+	}
+
+	// Run the TUI conflict resolver
+	tuiResult, err := tui.RunConflictResolver(conflicts)
+	if err != nil {
+		return fmt.Errorf("conflict resolver failed: %w", err)
+	}
+
+	// Handle the result
+	if tuiResult.Aborted {
+		return fmt.Errorf("conflict resolution aborted")
+	}
+
+	// Show summary
+	fmt.Printf("\n✓ Resolved %d/%d conflicts\n", tuiResult.ResolvedCount, tuiResult.TotalCount)
+
+	if tuiResult.ResolvedCount == tuiResult.TotalCount {
+		fmt.Println("All conflicts resolved! You can now continue working.")
+		fmt.Println("Run 'svf sync' again to complete the sync if needed.")
+	} else {
+		fmt.Println("Some conflicts remain unresolved.")
+		fmt.Println("Run 'svf sync' again to continue resolving.")
+	}
+
 	return nil
 }
 

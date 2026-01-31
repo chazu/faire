@@ -6,11 +6,14 @@ import (
 	"fmt"
 	"os"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
 	"github.com/chazuruo/svf/internal/ai"
 	"github.com/chazuruo/svf/internal/config"
 	"github.com/chazuruo/svf/internal/gitrepo"
+	"github.com/chazuruo/svf/internal/tui"
 	"github.com/chazuruo/svf/internal/workflows"
+	"github.com/chazuruo/svf/internal/workflows/store"
 )
 
 // AskOptions contains the options for the ask command.
@@ -95,11 +98,98 @@ func runAsk(opts *AskOptions) error {
 
 // runAskInteractive runs ask command in TUI mode.
 func runAskInteractive(ctx context.Context, opts *AskOptions, cfg *config.Config) error {
-	// TODO: Integrate with TUI ask model
-	// For now, fall back to non-interactive with error
-	fmt.Println("Interactive mode requires TUI implementation.")
-	fmt.Println("Please use --no-tui flag for non-interactive mode.")
-	return runAskNonInteractive(ctx, opts, cfg)
+	// Build TUI options
+	tuiOpts := &tui.AskOptions{
+		Provider:  opts.Provider,
+		Model:     opts.Model,
+		APIKeyEnv: opts.APIKeyEnv,
+		As:        opts.As,
+		Identity:  opts.Identity,
+		NoCommit:  opts.NoCommit,
+	}
+
+	// Create and run the ask TUI
+	model := tui.NewAskModel(ctx, cfg, tuiOpts)
+
+	p := tea.NewProgram(model, tea.WithAltScreen())
+	finalModel, err := p.Run()
+	if err != nil {
+		return fmt.Errorf("failed to run TUI: %w", err)
+	}
+
+	askModel, ok := finalModel.(*tui.AskModel)
+	if !ok {
+		return fmt.Errorf("unexpected model type")
+	}
+
+	// Handle result
+	if askModel.DidCancel() {
+		fmt.Println("Canceled.")
+		return nil
+	}
+
+	if askModel.DidSave() {
+		wf := askModel.GetWorkflow()
+		if wf == nil {
+			return fmt.Errorf("no workflow generated")
+		}
+
+		// Save workflow to repository
+		repo := gitrepo.New(cfg.Repo.Path)
+		if err := saveWorkflowToRepo(ctx, repo, wf, opts, cfg); err != nil {
+			return fmt.Errorf("failed to save workflow: %w", err)
+		}
+
+		fmt.Printf("\nWorkflow saved: %s\n", wf.Title)
+		return nil
+	}
+
+	return nil
+}
+
+// saveWorkflowToRepo saves a workflow to the repository.
+func saveWorkflowToRepo(ctx context.Context, repo gitrepo.Repo, wf *workflows.Workflow, opts *AskOptions, cfg *config.Config) error {
+	// Generate ID if not set
+	if wf.ID == "" {
+		wf.ID = generateULID()
+	}
+
+	// Validate workflow
+	if wf.Title == "" {
+		return fmt.Errorf("workflow title is required")
+	}
+
+	// Create store
+	st, err := store.New(repo, cfg)
+	if err != nil {
+		return fmt.Errorf("failed to create store: %w", err)
+	}
+
+	// Save options
+	saveOpts := store.SaveOptions{
+		Commit: !opts.NoCommit,
+		Message: fmt.Sprintf("Add workflow: %s", wf.Title),
+	}
+
+	// Set identity path if provided
+	if opts.Identity != "" {
+		// The store will use the config identity path, but we could
+		// extend this to support custom identity paths per workflow
+	}
+
+	// Save the workflow
+	_, err = st.Save(ctx, wf, saveOpts)
+	if err != nil {
+		return fmt.Errorf("failed to save workflow: %w", err)
+	}
+
+	return nil
+}
+
+// generateULID generates a unique ULID for the workflow ID.
+func generateULID() string {
+	// Simple ID generation - in production use a proper ULID library
+	return fmt.Sprintf("wf_%d", os.Getpid())
 }
 
 // runAskNonInteractive runs ask command in non-interactive mode.

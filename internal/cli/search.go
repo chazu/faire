@@ -6,11 +6,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
 	"github.com/chazuruo/svf/internal/config"
 	"github.com/chazuruo/svf/internal/gitrepo"
 	"github.com/chazuruo/svf/internal/index"
+	"github.com/chazuruo/svf/internal/tui"
 )
 
 // SearchOptions contains the options for the search command.
@@ -79,7 +82,7 @@ func runSearch(opts *SearchOptions) error {
 	}
 
 	// Check if index exists and is not stale
-	builder := index.NewBuilder(cfg.Repo.Path)
+	builder := index.NewBuilder(cfg.Repo.Path, cfg)
 	idx, err := builder.Load()
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -121,6 +124,11 @@ func searchNonInteractive(ctx context.Context, idx *index.Index, opts *SearchOpt
 		MaxResults: 0, // No limit
 	}
 
+	// If --mine is specified without explicit identity path, use config identity path
+	if opts.Mine && searchOpts.IdentityPath == "" {
+		searchOpts.IdentityPath = cfg.Identity.Path
+	}
+
 	// Perform search
 	results := idx.FuzzySearch(searchOpts)
 
@@ -134,17 +142,68 @@ func searchNonInteractive(ctx context.Context, idx *index.Index, opts *SearchOpt
 
 // searchInteractive performs interactive TUI search.
 func searchInteractive(ctx context.Context, idx *index.Index, opts *SearchOptions, cfg *config.Config) error {
-	// TODO: Integrate with TUI search model
-	// For now, fall back to non-interactive
-	fmt.Println("(Interactive mode - TODO: integrate TUI search)")
-	fmt.Println("Falling back to non-interactive mode...")
+	// Create TUI search model
+	model := tui.NewSearchModel(idx)
 
-	// Set query to empty to show all results if no query provided
-	if opts.Query == "" {
-		opts.Query = ""
+	// Set initial query if provided
+	if opts.Query != "" {
+		model.SearchInput.SetValue(opts.Query)
+		model.SearchInput.CursorEnd()
+		model.PerformSearch()
 	}
 
-	return searchNonInteractive(ctx, idx, opts, cfg)
+	// Set initial filters
+	if opts.Mine {
+		model.Mine = true
+		model.PerformSearch()
+	}
+	if opts.Shared {
+		model.Shared = true
+		model.PerformSearch()
+	}
+	if len(opts.Tags) > 0 {
+		model.Tags = opts.Tags
+		model.PerformSearch()
+	}
+
+	// Run TUI
+	p := tea.NewProgram(model, tea.WithAltScreen())
+	finalModel, err := p.Run()
+	if err != nil {
+		return fmt.Errorf("failed to run search TUI: %w", err)
+	}
+
+	// Get the final model
+	finalSearch, ok := finalModel.(tui.SearchModel)
+	if !ok {
+		return fmt.Errorf("unexpected model type from search")
+	}
+
+	// Check if user quit without selecting
+	if finalSearch.DidQuit() {
+		fmt.Println("Search cancelled.")
+		return nil
+	}
+
+	// Display selected workflow
+	if finalSearch.DidConfirm() {
+		entry := finalSearch.GetSelectedEntry()
+		if entry != nil {
+			fmt.Printf("\nSelected: %s\n", entry.Title)
+			fmt.Printf("ID: %s\n", entry.ID)
+			fmt.Printf("Path: %s\n", entry.Path)
+			if len(entry.Tags) > 0 {
+				fmt.Printf("Tags: [%s]\n", strings.Join(entry.Tags, ", "))
+			}
+
+			// Suggest next actions
+			fmt.Printf("\nNext steps:\n")
+			fmt.Printf("  svf view %s   # View workflow details\n", entry.ID)
+			fmt.Printf("  svf run %s    # Run the workflow\n", entry.ID)
+		}
+	}
+
+	return nil
 }
 
 // outputPlain outputs search results in plain text format.
@@ -160,8 +219,8 @@ func outputPlain(results []index.SearchResult) error {
 		entry := result.Entry
 		fmt.Printf("%d. %s\n", i+1, entry.Title)
 		fmt.Printf("   ID: %s\n", entry.ID)
-		if entry.Tags != "" {
-			fmt.Printf("   Tags: %s\n", entry.Tags)
+		if len(entry.Tags) > 0 {
+			fmt.Printf("   Tags: %s\n", strings.Join(entry.Tags, ", "))
 		}
 		if len(result.Matches) > 0 {
 			fmt.Printf("   Matches: %v\n", result.Matches)

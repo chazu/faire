@@ -164,9 +164,10 @@ func (m HistoryPickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	// Update filter input
 	if m.Focused == "filter" {
+		oldFilter := m.FilterInput.Value()
 		m.FilterInput, cmd = m.FilterInput.Update(msg)
 		newFilter := m.FilterInput.Value()
-		if newFilter != m.FilterInput.Value() {
+		if newFilter != oldFilter {
 			m.applyFilter(newFilter)
 		}
 	}
@@ -368,18 +369,4 @@ func (m HistoryPickerModel) DidQuit() bool {
 // DidConfirm returns true if the user confirmed selection.
 func (m HistoryPickerModel) DidConfirm() bool {
 	return m.Confirmed
-}
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
-
-func max(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
 }

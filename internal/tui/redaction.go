@@ -7,10 +7,10 @@ import (
 	"regexp"
 	"strings"
 
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/textinput"
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
 
@@ -44,6 +44,13 @@ type RedactionModel struct {
 	editInput    textinput.Model
 	editIndex    int
 	editOriginal string
+	// Enhanced edit mode fields
+	editField        editFieldType // Which field is being edited
+	editPrompt       textinput.Model
+	editReplacement  textinput.Model
+	editQuickMode    bool   // Quick edit mode (single field)
+	editPreview      string // Preview of replacement
+	editAppliedStyle lipgloss.Style
 
 	// styles
 	normalStyle   lipgloss.Style
@@ -53,6 +60,8 @@ type RedactionModel struct {
 	headerStyle   lipgloss.Style
 	labelStyle    lipgloss.Style
 	infoStyle     lipgloss.Style
+	successStyle  lipgloss.Style
+	errorStyle    lipgloss.Style
 
 	// width and height
 	width  int
@@ -73,6 +82,15 @@ const (
 	RedactionStateConfirming
 	// RedactionStateFinished means redaction is complete.
 	RedactionStateFinished
+)
+
+// editFieldType represents which field is being edited in edit mode.
+type editFieldType int
+
+const (
+	editFieldReplacement editFieldType = iota
+	editFieldCustom
+	editFieldPattern
 )
 
 // RedactedItem represents a detected sensitive item.
@@ -246,6 +264,12 @@ func NewRedactionModel(content string) RedactionModel {
 	ei := textinput.New()
 	ei.Placeholder = "Enter replacement value (or leave blank for <REDACTED>)"
 
+	// Create enhanced edit inputs
+	editPrompt := textinput.New()
+	editPrompt.Placeholder = "Quick replacement"
+	editReplacement := textinput.New()
+	editReplacement.Placeholder = "Custom redaction text"
+
 	// Styles
 	normalStyle := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("251"))
@@ -263,26 +287,43 @@ func NewRedactionModel(content string) RedactionModel {
 		Bold(true)
 	labelStyle := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("242")).
-		Width(15)
+		Width(18)
 	infoStyle := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("245"))
+	successStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("86")).
+		Bold(true)
+	errorStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("203")).
+		Bold(true)
+	editAppliedStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("212")).
+		Background(lipgloss.Color("236")).
+		Padding(0, 1)
 
 	return RedactionModel{
-		Content:         content,
-		RedactedContent: content,
-		State:           RedactionStateReviewing,
-		List:            l,
-		Textarea:        ta,
-		ConfirmInput:    ti,
-		editInput:       ei,
-		editing:         false,
-		normalStyle:     normalStyle,
-		selectedStyle:   selectedStyle,
-		redactedStyle:   redactedStyle,
-		warningStyle:    warningStyle,
-		headerStyle:     headerStyle,
-		labelStyle:      labelStyle,
-		infoStyle:       infoStyle,
+		Content:          content,
+		RedactedContent:  content,
+		State:            RedactionStateReviewing,
+		List:             l,
+		Textarea:         ta,
+		ConfirmInput:     ti,
+		editInput:        ei,
+		editPrompt:       editPrompt,
+		editReplacement:  editReplacement,
+		editing:          false,
+		editQuickMode:    true,
+		editField:        editFieldReplacement,
+		normalStyle:      normalStyle,
+		selectedStyle:    selectedStyle,
+		redactedStyle:    redactedStyle,
+		warningStyle:     warningStyle,
+		headerStyle:      headerStyle,
+		labelStyle:       labelStyle,
+		infoStyle:        infoStyle,
+		editAppliedStyle: editAppliedStyle,
+		successStyle:     successStyle,
+		errorStyle:       errorStyle,
 	}
 }
 
@@ -370,9 +411,28 @@ func (m RedactionModel) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.editing = true
 				m.editIndex = m.List.Index()
 				m.editOriginal = item.original
-				m.editInput.Reset()
-				m.editInput.Placeholder = fmt.Sprintf("Replace '%s' with (blank = <REDACTED>)", truncateString(item.original, 30))
-				m.editInput.Focus()
+				m.editField = editFieldReplacement
+				m.editQuickMode = true
+
+				// Initialize quick edit input with current value if already redacted
+				if item.redacted != item.original && item.redacted != "<REDACTED>" {
+					m.editPrompt.Reset()
+					m.editPrompt.SetValue(item.redacted)
+				} else {
+					m.editPrompt.Reset()
+				}
+				m.editPrompt.Placeholder = fmt.Sprintf("Replace '%s' with", truncateString(item.original, 30))
+				m.editPrompt.Focus()
+
+				// Initialize advanced edit input
+				m.editReplacement.Reset()
+				m.editReplacement.Blur()
+
+				// Set initial preview
+				m.editPreview = ""
+				if item.redacted != item.original {
+					m.editPreview = item.redacted
+				}
 			}
 		}
 
@@ -428,14 +488,24 @@ func (m RedactionModel) handleEditingKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// Cancel editing
 		m.editing = false
 		m.editInput.Reset()
+		m.editPrompt.Reset()
+		m.editReplacement.Reset()
+		m.editQuickMode = true
 		return m, nil
 
 	case tea.KeyEnter:
 		// Apply edit
-		replacement := m.editInput.Value()
+		var replacement string
+		if m.editQuickMode {
+			replacement = m.editPrompt.Value()
+		} else {
+			replacement = m.editReplacement.Value()
+		}
+
 		if replacement == "" {
 			replacement = "<REDACTED>"
 		}
+
 		item := m.List.Items()[m.editIndex].(redactionItem)
 		item.redacted = replacement
 		m.List.SetItem(m.editIndex, item)
@@ -443,13 +513,72 @@ func (m RedactionModel) handleEditingKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 		m.editing = false
 		m.editInput.Reset()
+		m.editPrompt.Reset()
+		m.editReplacement.Reset()
+		m.editQuickMode = true
+		m.State = RedactionStateRedacting
+		return m, nil
+
+	case tea.KeyTab:
+		// Toggle between quick and advanced mode
+		m.editQuickMode = !m.editQuickMode
+		if m.editQuickMode {
+			m.editPrompt.Focus()
+			m.editReplacement.Blur()
+		} else {
+			m.editPrompt.Blur()
+			m.editReplacement.Focus()
+		}
+		return m, nil
+
+	case tea.KeyCtrlR:
+		// Quick redaction with <REDACTED>
+		item := m.List.Items()[m.editIndex].(redactionItem)
+		item.redacted = "<REDACTED>"
+		m.List.SetItem(m.editIndex, item)
+		m.updateRedactedContent()
+		m.editing = false
+		m.State = RedactionStateRedacting
+		return m, nil
+
+	case tea.KeyCtrlS:
+		// Quick redaction with [SAME TYPE]
+		item := m.List.Items()[m.editIndex].(redactionItem)
+		item.redacted = fmt.Sprintf("<%s>", strings.ToUpper(string(item.itemType)))
+		m.List.SetItem(m.editIndex, item)
+		m.updateRedactedContent()
+		m.editing = false
+		m.State = RedactionStateRedacting
+		return m, nil
+
+	case tea.KeyCtrlU:
+		// Quick redaction with asterisks (same length)
+		item := m.List.Items()[m.editIndex].(redactionItem)
+		item.redacted = strings.Repeat("*", len(item.original))
+		m.List.SetItem(m.editIndex, item)
+		m.updateRedactedContent()
+		m.editing = false
 		m.State = RedactionStateRedacting
 		return m, nil
 	}
 
-	// Update edit input
+	// Update edit inputs
 	var cmd tea.Cmd
-	m.editInput, cmd = m.editInput.Update(msg)
+	if m.editQuickMode {
+		m.editPrompt, cmd = m.editPrompt.Update(msg)
+		// Update preview
+		m.editPreview = m.editPrompt.Value()
+		if m.editPreview == "" {
+			m.editPreview = "<REDACTED>"
+		}
+	} else {
+		m.editReplacement, cmd = m.editReplacement.Update(msg)
+		// Update preview
+		m.editPreview = m.editReplacement.Value()
+		if m.editPreview == "" {
+			m.editPreview = "<REDACTED>"
+		}
+	}
 	return m, cmd
 }
 
@@ -481,15 +610,91 @@ func (m RedactionModel) reviewView() string {
 	b.WriteString(m.headerStyle.Render("🔒 Data Redaction"))
 	b.WriteString("\n\n")
 
-	// Instructions
+	// Instructions with better organization
 	if m.State == RedactionStateReviewing {
-		b.WriteString("Review detected sensitive data:\n\n")
-		b.WriteString("  [a] Redact all  [r] Redact selected  [e] Edit selected  [c] Confirm\n")
-		b.WriteString("  [↑/↓] Navigate  [q] Quit\n\n")
+		b.WriteString(m.infoStyle.Render("Review detected sensitive data:"))
+		b.WriteString("\n\n")
+
+		// Action groups
+		actionStyle := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("251")).
+			Width(25)
+
+		redactActions := actionStyle.Render(
+			" [a]: Redact all\n" +
+				" [r]: Redact selected\n" +
+				" [e]: Edit selected",
+		)
+
+		navigateActions := actionStyle.Render(
+			" [↑/↓]: Navigate\n" +
+				" [Enter]: View details\n" +
+				" [c]: Confirm changes",
+		)
+
+		otherActions := actionStyle.Render(
+			" [q]: Quit\n" +
+				" [?]: Help",
+		)
+
+		actionsRow := lipgloss.JoinHorizontal(lipgloss.Top, redactActions, navigateActions, otherActions)
+		b.WriteString(actionsRow)
+		b.WriteString("\n\n")
+
+		// Status summary
+		redactedCount := m.countRedactedItems()
+		totalCount := len(m.List.Items())
+		if totalCount > 0 {
+			statusText := fmt.Sprintf("Status: %d/%d items redacted", redactedCount, totalCount)
+			if redactedCount > 0 {
+				b.WriteString(m.successStyle.Render("  ✓ " + statusText))
+			} else {
+				b.WriteString(m.warningStyle.Render("  ⚠ " + statusText))
+			}
+		}
+		b.WriteString("\n\n")
 	} else {
-		b.WriteString("Redaction complete. Review changes:\n\n")
-		b.WriteString("  [a] Redact all  [r] Redact selected  [e] Edit selected  [u] Undo all\n")
-		b.WriteString("  [c] Confirm to send  [esc] Go back  [q] Quit\n\n")
+		b.WriteString(m.infoStyle.Render("Redaction complete. Review changes:"))
+		b.WriteString("\n\n")
+
+		// Action groups for redacting state
+		actionStyle := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("251")).
+			Width(25)
+
+		modifyActions := actionStyle.Render(
+			" [r]: Redact selected\n" +
+				" [e]: Edit selected\n" +
+				" [u]: Undo all",
+		)
+
+		navigateActions := actionStyle.Render(
+			" [↑/↓]: Navigate\n" +
+				" [Enter]: View details\n" +
+				" [c]: Confirm to send",
+		)
+
+		otherActions := actionStyle.Render(
+			" [esc]: Go back\n" +
+				" [q]: Quit",
+		)
+
+		actionsRow := lipgloss.JoinHorizontal(lipgloss.Top, modifyActions, navigateActions, otherActions)
+		b.WriteString(actionsRow)
+		b.WriteString("\n\n")
+
+		// Status summary
+		redactedCount := m.countRedactedItems()
+		totalCount := len(m.List.Items())
+		if totalCount > 0 {
+			statusText := fmt.Sprintf("Status: %d/%d items redacted", redactedCount, totalCount)
+			if redactedCount > 0 {
+				b.WriteString(m.successStyle.Render("  ✓ " + statusText))
+			} else {
+				b.WriteString(m.warningStyle.Render("  ⚠ " + statusText))
+			}
+		}
+		b.WriteString("\n\n")
 	}
 
 	// Left panel: detected items
@@ -516,19 +721,100 @@ func (m RedactionModel) editView() string {
 	// Show original value
 	item := m.List.Items()[m.editIndex].(redactionItem)
 
+	// Type badge with color coding based on type
+	typeColor := m.getTypeColor(item.itemType)
+	typeBadge := lipgloss.NewStyle().
+		Foreground(typeColor).
+		Background(lipgloss.Color("235")).
+		Padding(0, 1).
+		Render(string(item.itemType))
+
 	b.WriteString(m.labelStyle.Render("Type:"))
 	b.WriteString(" ")
-	b.WriteString(m.infoStyle.Render(string(item.itemType)))
+	b.WriteString(typeBadge)
 	b.WriteString("\n\n")
 
+	// Original value with truncation and visual distinction
 	b.WriteString(m.labelStyle.Render("Original:"))
-	b.WriteString(" ")
-	b.WriteString(m.redactedStyle.Render(truncateString(item.original, 60)))
+	b.WriteString("\n")
+	originalDisplay := truncateString(item.original, 70)
+	if len(item.original) > 70 {
+		originalDisplay += m.infoStyle.Render("...")
+	}
+	b.WriteString("  " + m.redactedStyle.Render(originalDisplay))
 	b.WriteString("\n\n")
 
-	b.WriteString(m.labelStyle.Render("Replace with:"))
-	b.WriteString("\n")
-	b.WriteString(m.editInput.View())
+	// Current value (if already edited)
+	if item.redacted != item.original {
+		b.WriteString(m.labelStyle.Render("Current:"))
+		b.WriteString("\n")
+		currentDisplay := truncateString(item.redacted, 70)
+		if len(item.redacted) > 70 {
+			currentDisplay += m.infoStyle.Render("...")
+		}
+		b.WriteString("  " + m.successStyle.Render(currentDisplay))
+		b.WriteString("\n\n")
+	}
+
+	// Mode indicator
+	modeStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("241")).
+		Italic(true)
+	modeText := "Quick Mode"
+	if !m.editQuickMode {
+		modeText = "Advanced Mode"
+	}
+	b.WriteString(modeStyle.Render("Mode: " + modeText + " (Tab to toggle)"))
+	b.WriteString("\n\n")
+
+	if m.editQuickMode {
+		// Quick edit mode - single input field
+		b.WriteString(m.labelStyle.Render("Quick Replace:"))
+		b.WriteString("\n")
+		b.WriteString(m.editPrompt.View())
+		b.WriteString("\n\n")
+
+		// Live preview
+		b.WriteString(m.labelStyle.Render("Preview:"))
+		b.WriteString("\n")
+		previewText := m.editPreview
+		if previewText == "" {
+			previewText = "<REDACTED>"
+		}
+		b.WriteString("  " + m.editAppliedStyle.Render(previewText))
+		b.WriteString("\n\n")
+
+		// Quick action hints
+		quickHintStyle := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("245")).
+			MarginBottom(1)
+		b.WriteString(quickHintStyle.Render("Quick Actions:"))
+		b.WriteString("\n")
+		b.WriteString("  [Ctrl+R]: <REDACTED>  [Ctrl+S]: <TYPE>  [Ctrl+U]: ***masked***")
+		b.WriteString("\n\n")
+	} else {
+		// Advanced mode - custom replacement
+		b.WriteString(m.labelStyle.Render("Custom Text:"))
+		b.WriteString("\n")
+		b.WriteString(m.editReplacement.View())
+		b.WriteString("\n\n")
+
+		// Live preview
+		b.WriteString(m.labelStyle.Render("Preview:"))
+		b.WriteString("\n")
+		previewText := m.editReplacement.Value()
+		if previewText == "" {
+			previewText = "<REDACTED>"
+		}
+		b.WriteString("  " + m.editAppliedStyle.Render(previewText))
+		b.WriteString("\n\n")
+	}
+
+	// Additional info
+	infoStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("244")).
+		Italic(true)
+	b.WriteString(infoStyle.Render(fmt.Sprintf("Length: %d characters", len(item.original))))
 	b.WriteString("\n\n")
 
 	// Footer
@@ -537,12 +823,32 @@ func (m RedactionModel) editView() string {
 		MarginTop(1)
 
 	footer := footerStyle.Render(
-		" [Enter]: apply replacement (blank = <REDACTED>)  [Esc]: cancel",
+		" [Enter]: apply  [Tab]: toggle mode  [Esc]: cancel",
 	)
 
 	b.WriteString(footer)
 
 	return b.String()
+}
+
+// getTypeColor returns a color for the given sensitive type.
+func (m RedactionModel) getTypeColor(st SensitiveType) lipgloss.Color {
+	switch st {
+	case TypeAPIKey:
+		return lipgloss.Color("203") // Red/pink
+	case TypePassword, TypeSecret, TypePrivateKey:
+		return lipgloss.Color("196") // Bright red
+	case TypeToken, TypeBearer, TypeAuthHeader:
+		return lipgloss.Color("226") // Yellow
+	case TypeEmail:
+		return lipgloss.Color("86") // Cyan
+	case TypeCookie, TypeSession:
+		return lipgloss.Color("212") // Pink/purple
+	case TypeCredential:
+		return lipgloss.Color("208") // Orange
+	default:
+		return lipgloss.Color("245") // Grey
+	}
 }
 
 // confirmView shows the confirmation dialog.
@@ -555,31 +861,113 @@ func (m RedactionModel) confirmView() string {
 	b.WriteString(m.warningStyle.Render("WARNING: This data will be sent to an external AI provider."))
 	b.WriteString("\n\n")
 
-	b.WriteString("Summary:\n")
-	b.WriteString(fmt.Sprintf("  Original length: %d characters\n", len(m.Content)))
-	b.WriteString(fmt.Sprintf("  Redacted length: %d characters\n", len(m.RedactedContent)))
+	// Summary section
+	summaryStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("86")).
+		Bold(true).
+		MarginBottom(1)
+	b.WriteString(summaryStyle.Render("Summary:"))
+	b.WriteString("\n")
+
+	// Stats grid
+	statStyle := lipgloss.NewStyle().
+		Width(30)
+
+	stat1 := statStyle.Render(
+		fmt.Sprintf("  Original length: %d chars", len(m.Content)),
+	)
+	stat2 := statStyle.Render(
+		fmt.Sprintf("  Redacted length: %d chars", len(m.RedactedContent)),
+	)
 
 	redactedCount := m.countRedactedItems()
+	totalCount := len(m.List.Items())
+
+	stat3 := statStyle.Render(
+		fmt.Sprintf("  Items redacted: %d/%d", redactedCount, totalCount),
+	)
+
+	// Status indicator
+	statusStyle := lipgloss.NewStyle().
+		Width(30)
 	if redactedCount > 0 {
-		b.WriteString(fmt.Sprintf("  Items redacted: %d\n", redactedCount))
-		b.WriteString(m.infoStyle.Render("  ✓ Some data has been redacted\n"))
+		stat4 := statusStyle.Render(
+			m.successStyle.Render("  ✓ Data protected"),
+		)
+		b.WriteString(lipgloss.JoinHorizontal(lipgloss.Top, stat1, stat2))
+		b.WriteString("\n")
+		b.WriteString(lipgloss.JoinHorizontal(lipgloss.Top, stat3, stat4))
 	} else {
-		b.WriteString(m.warningStyle.Render("  ⚠ No changes made (data will be sent as-is)\n"))
+		stat4 := statusStyle.Render(
+			m.errorStyle.Render("  ⚠ No protection!"),
+		)
+		b.WriteString(lipgloss.JoinHorizontal(lipgloss.Top, stat1, stat2))
+		b.WriteString("\n")
+		b.WriteString(lipgloss.JoinHorizontal(lipgloss.Top, stat3, stat4))
+	}
+	b.WriteString("\n\n")
+
+	// Detailed changes if any
+	if redactedCount > 0 {
+		detailStyle := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("86")).
+			Bold(true).
+			MarginBottom(1)
+		b.WriteString(detailStyle.Render("Redacted Items:"))
+		b.WriteString("\n")
+
+		// Show first few redacted items
+		count := 0
+		maxShow := 5
+		for _, listItem := range m.List.Items() {
+			if count >= maxShow {
+				break
+			}
+			ri := listItem.(redactionItem)
+			if ri.redacted != ri.original {
+				count++
+				typeColor := m.getTypeColor(ri.itemType)
+				typeBadge := lipgloss.NewStyle().
+					Foreground(typeColor).
+					Render(fmt.Sprintf("[%s]", ri.itemType))
+				b.WriteString(fmt.Sprintf("  %s %s → %s\n",
+					typeBadge,
+					truncateString(ri.original, 25),
+					m.successStyle.Render(ri.redacted),
+				))
+			}
+		}
+
+		if redactedCount > maxShow {
+			b.WriteString(fmt.Sprintf("  ... and %d more\n", redactedCount-maxShow))
+		}
+		b.WriteString("\n")
 	}
 
+	// Content preview
+	previewStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("86")).
+		Bold(true).
+		MarginBottom(1)
+	b.WriteString(previewStyle.Render("Redacted Content Preview:"))
 	b.WriteString("\n")
-	b.WriteString("Redacted content preview:\n")
-	b.WriteString("```\n")
+
+	previewBoxStyle := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("240")).
+		Padding(0, 1)
 
 	// Show preview
 	preview := m.RedactedContent
-	if len(preview) > 500 {
-		preview = preview[:500] + "..."
+	maxPreviewLen := 500
+	if len(preview) > maxPreviewLen {
+		preview = preview[:maxPreviewLen] + m.infoStyle.Render("...")
 	}
-	b.WriteString(preview)
+	b.WriteString(previewBoxStyle.Render(preview))
 
-	b.WriteString("\n```\n\n")
+	b.WriteString("\n\n")
 
+	// Confirmation input
 	b.WriteString("Type 'confirm' to send, or [q] to quit:\n\n")
 	b.WriteString(m.ConfirmInput.View())
 
@@ -608,15 +996,28 @@ func (m RedactionModel) finishedView() string {
 func (m RedactionModel) itemListView() string {
 	var b strings.Builder
 
-	b.WriteString(" Detected Items\n\n")
+	// Header with count
+	totalCount := len(m.List.Items())
+	redactedCount := m.countRedactedItems()
+
+	headerText := fmt.Sprintf(" Detected Items (%d/%d redacted)", redactedCount, totalCount)
+	headerStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("86")).
+		Bold(true)
+
+	b.WriteString(headerStyle.Render(headerText))
+	b.WriteString("\n\n")
 
 	if len(m.List.Items()) == 0 {
-		b.WriteString(" No sensitive items detected.")
+		noItemsStyle := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("245")).
+			Italic(true)
+		b.WriteString(noItemsStyle.Render("No sensitive items detected."))
 	} else {
 		b.WriteString(m.List.View())
 	}
 
-	width := 50
+	width := 55
 	return lipgloss.NewStyle().
 		Width(width).
 		Height(m.height - 10).
@@ -629,18 +1030,62 @@ func (m RedactionModel) itemListView() string {
 func (m RedactionModel) contentPreviewView() string {
 	var b strings.Builder
 
-	b.WriteString(" Content Preview\n\n")
+	// Header with stats
+	redactedCount := m.countRedactedItems()
+
+	headerText := fmt.Sprintf(" Content Preview (%d changes)", redactedCount)
+	headerStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("86")).
+		Bold(true)
+
+	b.WriteString(headerStyle.Render(headerText))
+	b.WriteString("\n\n")
 
 	// Show redacted content with highlighting
 	content := m.RedactedContent
+
+	// Get selected item for highlighting
+	var selectedItem *redactionItem
+	if m.State == RedactionStateRedacting || m.State == RedactionStateReviewing {
+		if len(m.List.Items()) > 0 && m.List.SelectedItem() != nil {
+			item := m.List.SelectedItem().(redactionItem)
+			selectedItem = &item
+		}
+	}
+
+	// Highlight redacted items and selected item
 	if m.State == RedactionStateRedacting {
-		// Highlight redacted items
-		content = strings.ReplaceAll(content, "<REDACTED>", m.redactedStyle.Render("<REDACTED>"))
+		// Highlight all redacted items
+		for _, listItem := range m.List.Items() {
+			ri := listItem.(redactionItem)
+			if ri.redacted != ri.original {
+				// Use different color for selected vs non-selected
+				if selectedItem != nil && selectedItem.index == ri.index {
+					content = strings.ReplaceAll(content, ri.redacted,
+						m.editAppliedStyle.Render(ri.redacted))
+				} else {
+					content = strings.ReplaceAll(content, ri.redacted,
+						m.redactedStyle.Render(ri.redacted))
+				}
+			}
+		}
+	}
+
+	// Highlight selected item in original content (if not redacted yet)
+	if selectedItem != nil && selectedItem.redacted == selectedItem.original {
+		content = strings.ReplaceAll(content, selectedItem.original,
+			m.selectedStyle.Render(selectedItem.original))
+	}
+
+	// Truncate content if too long
+	maxPreviewLen := 2000
+	if len(content) > maxPreviewLen {
+		content = content[:maxPreviewLen] + m.infoStyle.Render("\n\n... (content truncated)")
 	}
 
 	b.WriteString(content)
 
-	width := m.width - 60
+	width := m.width - 65
 	if width < 40 {
 		width = 40
 	}
@@ -718,10 +1163,7 @@ func (r redactionItem) FilterValue() string {
 
 // Title implements list.Item.
 func (r redactionItem) Title() string {
-	if r.redacted == "<REDACTED>" {
-		return fmt.Sprintf("[%s] <REDACTED>", r.itemType)
-	}
-	return fmt.Sprintf("[%s] %s", r.itemType, truncateString(r.original, 30))
+	return string(r.itemType)
 }
 
 // Description implements list.Item.
@@ -732,7 +1174,7 @@ func (r redactionItem) Description() string {
 // redactionDelegate defines how items are rendered in the list.
 type redactionDelegate struct{}
 
-func (d redactionDelegate) Height() int { return 2 }
+func (d redactionDelegate) Height() int  { return 3 }
 func (d redactionDelegate) Spacing() int { return 0 }
 func (d redactionDelegate) Update(msg tea.Msg, m *list.Model) tea.Cmd {
 	return nil
@@ -752,24 +1194,68 @@ func (d redactionDelegate) Render(w io.Writer, m list.Model, index int, listItem
 	normalStyle := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("251"))
 
-	var text string
+	// Type color coding
+	typeColor := d.getTypeColor(r.itemType)
+
+	// First line: index indicator and type
+	var prefix string
 	if index == m.Index() {
-		text = selectedStyle.Render("→ " + r.Title())
+		prefix = selectedStyle.Render("→")
 	} else {
-		text = normalStyle.Render("  " + r.Title())
+		prefix = normalStyle.Render(" ")
 	}
 
-	_, _ = fmt.Fprint(w, text)
+	indexStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("245")).
+		Width(3).
+		Align(lipgloss.Right)
 
-	// Second line: status
+	typeBadge := lipgloss.NewStyle().
+		Foreground(typeColor).
+		Render(fmt.Sprintf("[%s]", r.itemType))
+
+	_, _ = fmt.Fprintf(w, "%s %s %s\n", prefix, indexStyle.Render(fmt.Sprintf("%d.", index+1)), typeBadge)
+
+	// Second line: original value (truncated)
+	originalText := truncateString(r.original, 45)
+	if index == m.Index() {
+		originalText = selectedStyle.Render(originalText)
+	} else {
+		originalText = normalStyle.Render(originalText)
+	}
+	_, _ = fmt.Fprintf(w, "    %s\n", originalText)
+
+	// Third line: status/replacement
 	if r.redacted == "<REDACTED>" {
 		statusText := lipgloss.NewStyle().Foreground(lipgloss.Color("226")).Render("  [REDACTED]")
-		_, _ = fmt.Fprintf(w, "\n%s", statusText)
+		_, _ = fmt.Fprintf(w, "%s\n", statusText)
 	} else if r.redacted != r.original {
 		statusText := lipgloss.NewStyle().Foreground(lipgloss.Color("86")).Render(fmt.Sprintf("  → %s", truncateString(r.redacted, 40)))
-		_, _ = fmt.Fprintf(w, "\n%s", statusText)
+		_, _ = fmt.Fprintf(w, "%s\n", statusText)
 	} else {
-		_, _ = fmt.Fprintf(w, "\n")
+		// Show "[unchanged]" in dim color
+		statusText := lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Render("  [unchanged]")
+		_, _ = fmt.Fprintf(w, "%s\n", statusText)
+	}
+}
+
+// getTypeColor returns a color for the given sensitive type.
+func (d redactionDelegate) getTypeColor(st SensitiveType) lipgloss.Color {
+	switch st {
+	case TypeAPIKey:
+		return lipgloss.Color("203") // Red/pink
+	case TypePassword, TypeSecret, TypePrivateKey:
+		return lipgloss.Color("196") // Bright red
+	case TypeToken, TypeBearer, TypeAuthHeader:
+		return lipgloss.Color("226") // Yellow
+	case TypeEmail:
+		return lipgloss.Color("86") // Cyan
+	case TypeCookie, TypeSession:
+		return lipgloss.Color("212") // Pink/purple
+	case TypeCredential:
+		return lipgloss.Color("208") // Orange
+	default:
+		return lipgloss.Color("245") // Grey
 	}
 }
 

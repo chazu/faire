@@ -10,6 +10,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"golang.org/x/crypto/openpgp"
 )
 
 // ProgressHook is called during download with bytes downloaded and total bytes.
@@ -190,9 +192,126 @@ func (d *Downloader) findChecksumForFile(checksumsContent, filename string) stri
 	return ""
 }
 
-// VerifySignature verifies the GPG signature (optional, not implemented in this version).
+// VerifySignature verifies the GPG signature of a file.
+// The signature file should contain a detached signature for the target file.
+// publicKeyPath is the path to the public key file used for verification.
+// If publicKeyPath is empty, verification is skipped.
+// If the signature file is empty or doesn't exist, verification is skipped.
 func (d *Downloader) VerifySignature(filePath, signaturePath, publicKeyPath string) error {
-	// Signature verification requires GPG integration
-	// This is a placeholder for future implementation
+	// Skip verification if no public key provided
+	if publicKeyPath == "" {
+		return nil
+	}
+
+	// Skip verification if signature file doesn't exist or is empty
+	if signaturePath == "" {
+		return nil
+	}
+
+	sigInfo, err := os.Stat(signaturePath)
+	if err != nil || sigInfo.Size() == 0 {
+		// Signature file not available, skip verification
+		return nil
+	}
+
+	// Read the public key
+	keyFile, err := os.Open(publicKeyPath)
+	if err != nil {
+		return NewError(ExitVerificationError, "Failed to open public key file", err)
+	}
+	defer func() { _ = keyFile.Close() }()
+
+	keyring, err := openpgp.ReadArmoredKeyRing(keyFile)
+	if err != nil {
+		return NewError(ExitVerificationError, "Failed to read public key", err)
+	}
+
+	if len(keyring) == 0 {
+		return NewError(ExitVerificationError, "No public keys found in key file", nil)
+	}
+
+	// Read the signature file
+	sigFile, err := os.Open(signaturePath)
+	if err != nil {
+		return NewError(ExitVerificationError, "Failed to open signature file", err)
+	}
+	defer func() { _ = sigFile.Close() }()
+
+	// Read the file to be verified
+	dataFile, err := os.Open(filePath)
+	if err != nil {
+		return NewError(ExitVerificationError, "Failed to open file to verify", err)
+	}
+	defer func() { _ = dataFile.Close() }()
+
+	// Verify the detached signature
+	_, err = openpgp.CheckDetachedSignature(keyring, dataFile, sigFile)
+	if err != nil {
+		return NewError(ExitVerificationError, "Signature verification failed", err)
+	}
+
+	return nil
+}
+
+// VerifySignatureArmored verifies an armored GPG signature of a file.
+// This is used when the signature file is ASCII-armored (e.g., checksums.txt.sig).
+// publicKeyPath is the path to the public key file used for verification.
+// If publicKeyPath is empty, verification is skipped.
+func (d *Downloader) VerifySignatureArmored(signedFilePath, signaturePath, publicKeyPath string) error {
+	// Skip verification if no public key provided
+	if publicKeyPath == "" {
+		return nil
+	}
+
+	// Skip verification if signature file doesn't exist
+	if signaturePath == "" {
+		return nil
+	}
+
+	if _, err := os.Stat(signaturePath); os.IsNotExist(err) {
+		// Signature file not available, skip verification
+		return nil
+	}
+
+	// Read the public key
+	keyFile, err := os.Open(publicKeyPath)
+	if err != nil {
+		return NewError(ExitVerificationError, "Failed to open public key file", err)
+	}
+	defer func() { _ = keyFile.Close() }()
+
+	keyring, err := openpgp.ReadArmoredKeyRing(keyFile)
+	if err != nil {
+		return NewError(ExitVerificationError, "Failed to read public key", err)
+	}
+
+	if len(keyring) == 0 {
+		return NewError(ExitVerificationError, "No public keys found in key file", nil)
+	}
+
+	// Read the signed file
+	signedFile, err := os.Open(signedFilePath)
+	if err != nil {
+		return NewError(ExitVerificationError, "Failed to open signed file", err)
+	}
+	defer func() { _ = signedFile.Close() }()
+
+	// Read the signature file
+	sigFile, err := os.Open(signaturePath)
+	if err != nil {
+		return NewError(ExitVerificationError, "Failed to open signature file", err)
+	}
+	defer func() { _ = sigFile.Close() }()
+
+	// Verify the armored detached signature
+	signer, err := openpgp.CheckArmoredDetachedSignature(keyring, signedFile, sigFile)
+	if err != nil {
+		return NewError(ExitVerificationError, "Signature verification failed", err)
+	}
+
+	if signer == nil {
+		return NewError(ExitVerificationError, "Invalid signature: no signer found", nil)
+	}
+
 	return nil
 }

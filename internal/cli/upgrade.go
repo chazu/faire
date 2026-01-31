@@ -28,8 +28,13 @@ This command will:
 1. Check GitHub releases for the latest version
 2. Compare with your current version
 3. Download the new binary if available
-4. Verify checksums
+4. Verify checksums and GPG signatures (if available)
 5. Install the update (with automatic rollback on failure)
+
+GPG Signature Verification:
+If SVF_PUBLIC_KEY environment variable is set to a public key file path,
+the upgrade command will verify GPG signatures of release checksums.
+Set SVF_PUBLIC_KEY to enable this feature.
 
 Exit codes:
   0 - Success or already up-to-date
@@ -158,6 +163,25 @@ func installUpdate(ctx context.Context, binaryPath string, release *upgrade.Rele
 					return fmt.Errorf("checksum verification failed: %w", err)
 				}
 				fmt.Println("Checksum verified")
+
+				// Verify GPG signature if available
+				signatureAsset, sigErr := finder.FindSignature(release)
+				if sigErr == nil && signatureAsset != nil {
+					signaturePath := fmt.Sprintf("%s/%s", tempDir, signatureAsset.Name)
+					fmt.Printf("Downloading signature...\n")
+					if sigDlErr := downloader.Download(ctx, signatureAsset.URL, signaturePath); sigDlErr == nil {
+						// Try to get public key from environment or config
+						publicKeyPath := os.Getenv("SVF_PUBLIC_KEY")
+						if publicKeyPath != "" {
+							if sigErr := downloader.VerifySignature(checksumPath, signaturePath, publicKeyPath); sigErr != nil {
+								return fmt.Errorf("signature verification failed: %w", sigErr)
+							}
+							fmt.Println("Signature verified")
+						} else {
+							fmt.Println("Warning: Signature file found but SVF_PUBLIC_KEY not set, skipping signature verification")
+						}
+					}
+				}
 			}
 		}
 	}

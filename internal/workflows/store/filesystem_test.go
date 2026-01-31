@@ -10,6 +10,7 @@ import (
 
 	"github.com/chazuruo/svf/internal/config"
 	"github.com/chazuruo/svf/internal/gitrepo"
+	"github.com/chazuruo/svf/internal/index"
 	"github.com/chazuruo/svf/internal/workflows"
 )
 
@@ -46,7 +47,7 @@ func setupTestRepo(t *testing.T) (string, gitrepo.Repo, *config.Config) {
 			Root:       "workflows",
 			SharedRoot: "shared",
 			DraftRoot:  "drafts",
-			IndexPath:  "index.db",
+			IndexPath:  ".svf/index.json",
 		},
 		Identity: config.IdentityConfig{
 			Path: "platform/test",
@@ -283,6 +284,139 @@ func TestFileSystemStore_List(t *testing.T) {
 		// All workflows should be returned
 		if len(refs) == 0 {
 			t.Error("List() returned no refs")
+		}
+	})
+
+	t.Run("list with search filter", func(t *testing.T) {
+		// Build the index first
+		builder := index.NewBuilder(repo.Path(), cfg)
+		idx, err := builder.Build()
+		if err != nil {
+			t.Fatalf("failed to build index: %v", err)
+		}
+		if err := builder.Save(idx); err != nil {
+			t.Fatalf("failed to save index: %v", err)
+		}
+
+		// Create a new store to ensure the index is loaded
+		newStore, err := New(repo, cfg)
+		if err != nil {
+			t.Fatalf("failed to create new store: %v", err)
+		}
+
+		// Search for "Workflow 2"
+		refs, err := newStore.List(ctx, Filter{Search: "Workflow 2"})
+		if err != nil {
+			t.Fatalf("List() error = %v", err)
+		}
+
+		// Should only return Workflow 2
+		if len(refs) != 1 {
+			t.Errorf("List() returned %d refs, want 1", len(refs))
+		}
+		if len(refs) > 0 && !strings.Contains(refs[0].Slug, "workflow-2") {
+			t.Errorf("List() returned wrong workflow: %s", refs[0].Slug)
+		}
+	})
+
+	t.Run("list with tag filter", func(t *testing.T) {
+		// Create a workflow with tags
+		taggedWf := &workflows.Workflow{
+			SchemaVersion: 1,
+			Title:         "Tagged Workflow",
+			Description:   "A workflow with tags",
+			Tags:          []string{"test", "deploy"},
+			Steps:         []workflows.Step{{Name: "Step 1", Command: "echo test"}},
+		}
+		if _, err := store.Save(ctx, taggedWf, SaveOptions{}); err != nil {
+			t.Fatalf("failed to save tagged workflow: %v", err)
+		}
+
+		// Rebuild the index
+		builder := index.NewBuilder(repo.Path(), cfg)
+		idx, err := builder.Build()
+		if err != nil {
+			t.Fatalf("failed to build index: %v", err)
+		}
+		if err := builder.Save(idx); err != nil {
+			t.Fatalf("failed to save index: %v", err)
+		}
+
+		// Create a new store to ensure the index is loaded
+		newStore, err := New(repo, cfg)
+		if err != nil {
+			t.Fatalf("failed to create new store: %v", err)
+		}
+
+		// Filter by tag "test"
+		refs, err := newStore.List(ctx, Filter{Tags: []string{"test"}})
+		if err != nil {
+			t.Fatalf("List() error = %v", err)
+		}
+
+		// Should only return the tagged workflow
+		if len(refs) != 1 {
+			t.Errorf("List() returned %d refs, want 1", len(refs))
+		}
+		if len(refs) > 0 && !strings.Contains(refs[0].Slug, "tagged-workflow") {
+			t.Errorf("List() returned wrong workflow: %s", refs[0].Slug)
+		}
+	})
+
+	t.Run("list with search and tag filters", func(t *testing.T) {
+		// Create a workflow with tags
+		taggedWf := &workflows.Workflow{
+			SchemaVersion: 1,
+			Title:         "Deploy Production",
+			Description:   "Deploy to production",
+			Tags:          []string{"deploy", "production"},
+			Steps:         []workflows.Step{{Name: "Step 1", Command: "echo deploy"}},
+		}
+		if _, err := store.Save(ctx, taggedWf, SaveOptions{}); err != nil {
+			t.Fatalf("failed to save tagged workflow: %v", err)
+		}
+
+		// Rebuild the index
+		builder := index.NewBuilder(repo.Path(), cfg)
+		idx, err := builder.Build()
+		if err != nil {
+			t.Fatalf("failed to build index: %v", err)
+		}
+		if err := builder.Save(idx); err != nil {
+			t.Fatalf("failed to save index: %v", err)
+		}
+
+		// Create a new store to ensure the index is loaded
+		newStore, err := New(repo, cfg)
+		if err != nil {
+			t.Fatalf("failed to create new store: %v", err)
+		}
+
+		// Filter by search "Deploy" and tag "production"
+		refs, err := newStore.List(ctx, Filter{Search: "Deploy", Tags: []string{"production"}})
+		if err != nil {
+			t.Fatalf("List() error = %v", err)
+		}
+
+		// Should only return the matching workflow
+		if len(refs) != 1 {
+			t.Errorf("List() returned %d refs, want 1", len(refs))
+		}
+		if len(refs) > 0 && !strings.Contains(refs[0].Slug, "deploy-production") {
+			t.Errorf("List() returned wrong workflow: %s", refs[0].Slug)
+		}
+	})
+
+	t.Run("list with empty search query", func(t *testing.T) {
+		// Empty search should return all workflows
+		refs, err := store.List(ctx, Filter{Search: ""})
+		if err != nil {
+			t.Fatalf("List() error = %v", err)
+		}
+
+		// Should return all workflows
+		if len(refs) < 3 {
+			t.Errorf("List() returned %d refs, want at least 3", len(refs))
 		}
 	})
 }

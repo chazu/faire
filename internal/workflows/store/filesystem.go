@@ -6,17 +6,22 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/chazuruo/svf/internal/config"
 	"github.com/chazuruo/svf/internal/gitrepo"
+	"github.com/chazuruo/svf/internal/index"
 	"github.com/chazuruo/svf/internal/workflows"
 )
 
 // FileSystemStore implements the Store interface using the filesystem.
 type FileSystemStore struct {
-	repo   gitrepo.Repo
-	config *config.Config
+	repo        gitrepo.Repo
+	config      *config.Config
+	index       *index.Index
+	indexMutex  sync.RWMutex
+	indexLoaded bool
 }
 
 // New creates a new FileSystemStore.
@@ -37,6 +42,15 @@ func New(repo gitrepo.Repo, cfg *config.Config) (*FileSystemStore, error) {
 // List returns workflow references matching the given filter.
 func (s *FileSystemStore) List(ctx context.Context, filter Filter) ([]WorkflowRef, error) {
 	var refs []WorkflowRef
+
+	// Load index if we need to filter by tags or search
+	needsIndex := len(filter.Tags) > 0 || filter.Search != ""
+	if needsIndex {
+		if err := s.loadIndex(ctx); err != nil {
+			// If index fails to load, log warning but continue without it
+			fmt.Fprintf(os.Stderr, "Warning: failed to load index: %v\n", err)
+		}
+	}
 
 	// Walk workflows directory
 	workflowRoot := filepath.Join(s.repo.Path(), s.config.Workflows.Root)
@@ -224,18 +238,66 @@ func (s *FileSystemStore) matchesFilter(ref WorkflowRef, filter Filter, path str
 		}
 	}
 
-	// Filter by tags (requires loading the workflow)
+	// Filter by tags using the index
 	if len(filter.Tags) > 0 {
-		// This is a simplified check - in production we'd load and check
-		// For now, skip tag filtering to avoid loading every workflow
-		_ = filter.Tags // TODO: implement tag filtering
+		if !s.indexLoaded || s.index == nil {
+			// Index not available, skip tag filtering
+			return true
+		}
+
+		// Get relative path from repo root
+		relPath, err := filepath.Rel(s.repo.Path(), path)
+		if err != nil {
+			relPath = path
+		}
+
+		// Find the entry in the index
+		entry := s.index.GetByPath(relPath)
+		if entry == nil {
+			// Workflow not in index, skip it
+			return false
+		}
+
+		// Check if all tags are present
+		for _, filterTag := range filter.Tags {
+			found := false
+			for _, entryTag := range entry.Tags {
+				if strings.EqualFold(strings.TrimSpace(entryTag), filterTag) {
+					found = true
+					break
+				}
+			}
+			if !found {
+				return false
+			}
+		}
 	}
 
-	// Filter by search (requires loading the workflow)
+	// Filter by search using the index
 	if filter.Search != "" {
-		// This requires loading the workflow to check title/description
-		// For now, skip search filtering
-		_ = filter.Search // TODO: implement search filtering
+		if !s.indexLoaded || s.index == nil {
+			// Index not available, skip search filtering
+			return true
+		}
+
+		// Get relative path from repo root
+		relPath, err := filepath.Rel(s.repo.Path(), path)
+		if err != nil {
+			relPath = path
+		}
+
+		// Check if this workflow matches the search query
+		matches := false
+		searchResults := s.index.Search(filter.Search)
+		for _, result := range searchResults {
+			if result.Path == relPath {
+				matches = true
+				break
+			}
+		}
+		if !matches {
+			return false
+		}
 	}
 
 	return true
@@ -284,5 +346,29 @@ func (s *FileSystemStore) commitWorkflow(ctx context.Context, path, message stri
 		return fmt.Errorf("failed to commit: %w", err)
 	}
 
+	return nil
+}
+
+// loadIndex loads the search index, always loading from disk to get the latest version.
+func (s *FileSystemStore) loadIndex(ctx context.Context) error {
+	s.indexMutex.Lock()
+	defer s.indexMutex.Unlock()
+
+	builder := index.NewBuilder(s.repo.Path(), s.config)
+	idx, err := builder.Load()
+	if err != nil {
+		// If the index doesn't exist, try to build it
+		idx, err = builder.Build()
+		if err != nil {
+			return fmt.Errorf("failed to build index: %w", err)
+		}
+		// Save the index for next time
+		if saveErr := builder.Save(idx); saveErr != nil {
+			fmt.Fprintf(os.Stderr, "Warning: failed to save index: %v\n", saveErr)
+		}
+	}
+
+	s.index = idx
+	s.indexLoaded = true
 	return nil
 }

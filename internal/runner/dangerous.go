@@ -2,6 +2,7 @@
 package runner
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -165,17 +166,8 @@ func (dc *DangerChecker) PromptForConfirmation(command string, autoConfirm bool)
 	return danger.Confirm()
 }
 
-// ExecResult represents the result of executing a command.
-type ExecResult struct {
-	Command   string
-	ExitCode  int
-	Success   bool
-	Output    string
-	Dangerous bool
-	Danger    *DangerInfo
-}
-
 // ExecuteWithDangerCheck executes a command with danger checking.
+// Deprecated: Use runner.Exec with ExecConfig instead.
 func ExecuteWithDangerCheck(command string, checker *DangerChecker, autoConfirm bool) ExecResult {
 	// Check for danger first
 	danger := checker.Check(command)
@@ -201,13 +193,22 @@ func ExecuteWithDangerCheck(command string, checker *DangerChecker, autoConfirm 
 		}
 	}
 
-	// Execute the command
-	// For now, just return success (actual execution would happen in runner)
-	// TODO: Integrate with actual runner.Exec
-	result.Success = true
-	result.ExitCode = 0
+	// Execute the command using the new Exec function
+	execConfig := ExecConfig{
+		Command:       command,
+		DangerChecker: checker,
+		AutoConfirm:   autoConfirm,
+	}
+	execResult := Exec(context.Background(), execConfig)
 
-	return result
+	return ExecResult{
+		Command:   execResult.Command,
+		ExitCode:  execResult.ExitCode,
+		Success:   execResult.Success,
+		Output:    execResult.Output,
+		Dangerous: execResult.Dangerous,
+		Danger:    execResult.Danger,
+	}
 }
 
 // IsExitCode checks if an error is an exec.ExitError.
