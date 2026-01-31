@@ -1398,3 +1398,1054 @@ the workflow YAML structs + validation, and
 a Bubble Tea runner model scaffold with the message types above.
 
 ---
+---
+
+## G) Testing Approach
+
+### Philosophy
+
+Git-savvy is a CLI tool with three distinct layers requiring different testing strategies:
+
+1. **Core business logic** (workflows, placeholders, index) → unit tests with table-driven approach
+2. **Git operations** → integration tests with temporary repositories
+3. **TUI/UX** → golden file testing for Bubble Tea models
+
+No external mocking framework required—use standard library `testing` package and lightweight fakes.
+
+### Unit Testing (Core Logic)
+
+**Scope**: Packages with pure functions and well-defined inputs/outputs:
+- `internal/workflows` (validation, migrations, slug generation)
+- `internal/placeholders` (parsing, substitution, validation)
+- `internal/index` (building, searching, filtering)
+- `internal/export` (YAML/JSON/Markdown generation)
+
+**Pattern**: Table-driven tests for all public functions with edge cases:
+
+```go
+func TestPlaceholderSubstitution(t *testing.T) {
+    tests := []struct {
+        name     string
+        template string
+        values   map[string]string
+        want     string
+        wantErr  bool
+    }{
+        {
+            name:     "single placeholder",
+            template: "kubectl get pod <name>",
+            values:   map[string]string{"name": "web-1"},
+            want:     "kubectl get pod web-1",
+        },
+        {
+            name:     "missing placeholder",
+            template: "kubectl get pod <name>",
+            values:   map[string]string{},
+            wantErr:  true,
+        },
+        // ... more cases
+    }
+    for _, tt := range tests {
+        t.Run(tt.name, func(t *testing.T) {
+            got, err := Substitute(tt.template, tt.values)
+            if (err != nil) != tt.wantErr {
+                t.Errorf("Substitute() error = %v, wantErr %v", err, tt.wantErr)
+                return
+            }
+            if got != tt.want {
+                t.Errorf("Substitute() = %v, want %v", got, tt.want)
+            }
+        })
+    }
+}
+```
+
+**Coverage target**: ≥80% for core logic packages.
+
+### Integration Testing (Git Operations)
+
+**Scope**: `internal/gitrepo` package—must verify real Git behavior.
+
+**Approach**: Create temporary Git repositories for each test, clean up via `t.Cleanup()`:
+
+```go
+func TestRepoCommitAll(t *testing.T) {
+    // Create temp dir
+    tmpDir := t.TempDir()
+    
+    // Initialize git repo
+    repo, err := InitRepo(tmpDir, RepoOptions{
+        InitOptions: git.InitOptions{
+            DefaultBranch: "main",
+        },
+    })
+    if err != nil {
+        t.Fatal(err)
+    }
+    
+    // Write test file
+    testFile := filepath.Join(tmpDir, "test.txt")
+    if err := os.WriteFile(testFile, []byte("content"), 0644); err != nil {
+        t.Fatal(err)
+    }
+    
+    // Test commit
+    commitHash, err := repo.CommitAll(ctx, "test commit")
+    if err != nil {
+        t.Fatalf("CommitAll() error = %v", err)
+    }
+    
+    if commitHash == "" {
+        t.Error("CommitAll() returned empty hash")
+    }
+    
+    // Verify via git log
+    // ... verification logic
+}
+```
+
+**Test scenarios**:
+- Clone from remote (use local file:// URL for test repo)
+- Fetch, merge, rebase strategies
+- Conflict detection
+- Branch creation and checkout
+- Commit with various git configs (user, signing)
+
+### TUI Testing (Bubble Tea)
+
+**Scope**: All Bubble Tea models in `internal/tui/`.
+
+**Approach**: Golden file testing using bubbletea's standard pattern:
+
+```go
+func TestInitModel(t *testing.T) {
+    // Update golden files with: go test ./internal/tui -update-golden
+    update := len(os.Args) > 1 && os.Args[1] == "-update-golden"
+    
+    model := InitModel(InitOptions{
+        ConfigPath: "/fake/config.toml",
+    })
+    
+    // Simulate user input sequence
+    msgs := []tea.Msg{
+        tea.KeyMsg{Type: tea.KeyEnter},
+        tea.KeyMsg{Type: tea.KeyEnter},
+        // ... more input
+    }
+    
+    var buf bytes.Buffer
+    var fm *fumes.Fumes // or use bubbletea test utilities
+    
+    for _, msg := range msgs {
+        model, _ = model.Update(msg)
+    }
+    
+    // Compare view output
+    got := model.View()
+    
+    goldenFile := filepath.Join("testdata", "init_model.golden")
+    if update {
+        os.WriteFile(goldenFile, []byte(got), 0644)
+    }
+    
+    want, _ := os.ReadFile(goldenFile)
+    if got != string(want) {
+        t.Errorf("View() mismatch\nGot:  %s\nWant: %s", got, want)
+    }
+}
+```
+
+**Store golden files** in `testdata/` directories adjacent to test files.
+
+### Fake Implementations
+
+For packages that depend on external systems (AI providers, keychain), define interfaces and provide test fakes:
+
+```go
+// internal/ai/fake.go
+type FakeProvider struct {
+    GenerateWorkflowFunc func(ctx context.Context, prompt Prompt) (*workflows.Workflow, error)
+    ExplainFunc          func(ctx context.Context, input string) (string, error)
+}
+
+func (f *FakeProvider) Name() string { return "fake" }
+
+func (f *FakeProvider) GenerateWorkflow(ctx context.Context, prompt Prompt) (*workflows.Workflow, error) {
+    if f.GenerateWorkflowFunc != nil {
+        return f.GenerateWorkflowFunc(ctx, prompt)
+    }
+    return &workflows.Workflow{Title: "fake workflow"}, nil
+}
+
+func (f *FakeProvider) Explain(ctx context.Context, input string) (string, error) {
+    if f.ExplainFunc != nil {
+        return f.ExplainFunc(ctx, input)
+    }
+    return "fake explanation", nil
+}
+```
+
+### Test Data & Fixtures
+
+Place reusable test workflows in `testdata/workflows/`:
+- `minimal.yaml`: Smallest valid workflow
+- `with_placeholders.yaml`: Workflow with all placeholder features
+- `multi_step.yaml`: Complex workflow for runner testing
+- `invalid_v*.yaml`: Samples for migration testing
+
+### CI/CD Requirements
+
+- Run unit tests on all commits: `go test ./...`
+- Run integration tests with race detection: `go test -race ./...`
+- Golden file checks require explicit `-update-golden` flag
+- Target test duration: <30 seconds for full suite
+
+---
+
+## H) Error Handling Principles
+
+### Error Type Hierarchy
+
+Define a small set of error types for consistent handling:
+
+```go
+// internal/errors/errors.go
+package errors
+
+import (
+    "errors"
+    "fmt"
+)
+
+// Base error types—check with errors.Is()
+var (
+    ErrNotFound      = errors.New("not found")
+    ErrAlreadyExists = errors.New("already exists")
+    ErrInvalid       = errors.New("invalid")
+    ErrConflict      = errors.New("conflict")
+    ErrGit           = errors.New("git operation failed")
+    ErrIO            = errors.New("I/O error")
+    ErrCanceled      = errors.New("operation canceled")
+)
+
+// Wrapped errors provide context
+type WorkflowError struct {
+    Op  string // Operation: "load", "save", "validate"
+    Err error  // Underlying error
+    ID  string // Workflow ID or path (if applicable)
+}
+
+func (e *WorkflowError) Error() string {
+    if e.ID != "" {
+        return fmt.Sprintf("workflow %s: %s: %v", e.ID, e.Op, e.Err)
+    }
+    return fmt.Sprintf("workflow: %s: %v", e.Op, e.Err)
+}
+
+func (e *WorkflowError) Unwrap() error { return e.Err }
+
+type GitError struct {
+    Op  string // "fetch", "push", "commit", "merge"
+    Err error
+    Cmd string // Git command that failed (for debugging)
+}
+
+func (e *GitError) Error() string {
+    return fmt.Sprintf("git %s: %v", e.Op, e.Err)
+}
+
+func (e *GitError) Unwrap() error { return e.Err }
+```
+
+### Wrap-and-Annotate Pattern
+
+Always add context when returning errors:
+
+```go
+func (s *Store) Load(ctx context.Context, ref WorkflowRef) (*Workflow, error) {
+    path := s.resolvePath(ref)
+    
+    data, err := os.ReadFile(path)
+    if err != nil {
+        if os.IsNotExist(err) {
+            return nil, fmt.Errorf("%w: %s", ErrNotFound, ref)
+        }
+        return nil, &WorkflowError{Op: "load", Err: err, ID: ref.String()}
+    }
+    
+    var wf Workflow
+    if err := yaml.Unmarshal(data, &wf); err != nil {
+        return nil, &WorkflowError{Op: "parse", Err: err, ID: ref.String()}
+    }
+    
+    return &wf, nil
+}
+```
+
+### Retry Logic
+
+Only retry transient failures with clear backoff:
+
+```go
+// internal/gitrepo/fetch.go
+func (r *repo) Fetch(ctx context.Context) error {
+    const maxRetries = 3
+    var lastErr error
+    
+    for i := 0; i < maxRetries; i++ {
+        if err := r.fetchOnce(ctx); err == nil {
+            return nil
+        } else if isTransientError(err) {
+            lastErr = err
+            time.Sleep(backoff(i))
+            continue
+        } else {
+            return err // Non-transient—fail immediately
+        }
+    }
+    
+    return fmt.Errorf("fetch failed after %d retries: %w", maxRetries, lastErr)
+}
+
+func isTransientError(err error) bool {
+    // Network timeouts, TLS handshake failures, etc.
+    return strings.Contains(err.Error(), "connection reset") ||
+           strings.Contains(err.Error(), "timeout")
+}
+```
+
+Do NOT retry:
+- Validation errors (won't change)
+- Git conflicts (require manual resolution)
+- File not found (won't appear by retrying)
+
+### User-Facing Messages
+
+Technical errors go to logs (with `--verbose`); users see actionable messages:
+
+```go
+func (c *CLI) RunWorkflow(ref string) error {
+    wf, err := c.store.Load(ctx, ref)
+    if err != nil {
+        // User sees: "Workflow 'restart-service' not found"
+        // Log shows: "workflow load: open /path/to/file.yaml: no such file or directory"
+        if errors.Is(err, ErrNotFound) {
+            return fmt.Errorf("workflow %q not found (run 'gitsavvy list' to see available)", ref)
+        }
+        return fmt.Errorf("failed to load workflow: %w", err)
+    }
+    // ... rest of logic
+}
+```
+
+### Exit Code Mapping
+
+Commands map errors to exit codes consistently:
+
+```go
+// internal/cli/run.go
+func (cmd *RunCmd) Run(ctx context.Context) error {
+    wf, err := cmd.loadWorkflow()
+    if err != nil {
+        if errors.Is(err, ErrNotFound) {
+            return CLIError{Code: 1, UserMsg: "workflow not found"} // Generic failure
+        }
+        return CLIError{Code: 11, UserMsg: "repository not initialized"} // Repo missing
+    }
+    
+    result, err := cmd.runner.Run(ctx, wf)
+    if err != nil {
+        if errors.Is(err, ErrCanceled) {
+            return CLIError{Code: 13, UserMsg: "run canceled"} // Canceled
+        }
+        return CLIError{Code: 20, UserMsg: fmt.Sprintf("step %d failed", result.FailedStep)}
+    }
+    
+    return nil
+}
+
+type CLIError struct {
+    Code    int
+    UserMsg string
+}
+
+func (e CLIError) Error() string { return e.UserMsg }
+```
+
+### Validation Errors
+
+Collect multiple validation errors before failing:
+
+```go
+type ValidationErrors []error
+
+func (ve ValidationErrors) Error() string {
+    var sb strings.Builder
+    sb.WriteString("validation failed:\n")
+    for _, err := range ve {
+        sb.WriteString(fmt.Sprintf("  - %s\n", err))
+    }
+    return sb.String()
+}
+
+func (w *Workflow) Validate() error {
+    var errs ValidationErrors
+    
+    if w.Title == "" {
+        errs = append(errs, fmt.Errorf("title is required"))
+    }
+    if len(w.Steps) == 0 {
+        errs = append(errs, fmt.Errorf("at least one step required"))
+    }
+    for i, step := range w.Steps {
+        if step.Command == "" {
+            errs = append(errs, fmt.Errorf("step %d: command is required", i))
+        }
+    }
+    
+    if len(errs) > 0 {
+        return errs
+    }
+    return nil
+}
+```
+
+---
+
+## I) State Management
+
+### Run State Persistence
+
+Interrupted runs must be recoverable. Persist run state to `~/.local/share/gitsavvy/runs/<run-id>.json`:
+
+```go
+// internal/runner/state.go
+type RunState struct {
+    RunID       string              `json:"run_id"`
+    WorkflowRef string              `json:"workflow_ref"`
+    StartedAt   time.Time           `json:"started_at"`
+    UpdatedAt   time.Time           `json:"updated_at"`
+    Status      RunStatus           `json:"status"` // running, paused, completed, failed
+    CurrentStep int                 `json:"current_step"`
+    Placeholders map[string]string  `json:"placeholders"`
+    StepResults []StepResult        `json:"step_results"`
+    LogPath     string              `json:"log_path"` // Output file path
+}
+
+type RunStatus string
+
+const (
+    RunStatusRunning   RunStatus = "running"
+    RunStatusPaused    RunStatus = "paused"
+    RunStatusCompleted RunStatus = "completed"
+    RunStatusFailed    RunStatus = "failed"
+)
+```
+
+**Save triggers**:
+- Before each step execution
+- On Ctrl+C (interrupt)
+- On placeholder resolution
+- After step completion
+
+**Recovery flow**:
+```go
+func (r *runner) Run(ctx context.Context, plan Plan) (RunResult, error) {
+    // Check for existing state
+    if state, err := r.loadState(plan.RunID); err == nil {
+        if state.Status == RunStatusPaused {
+            return r.resumeRun(ctx, state, plan)
+        }
+    }
+    
+    // Fresh run
+    return r.startRun(ctx, plan)
+}
+```
+
+User can resume with: `gitsavvy run --resume <run-id>` or interactive prompt on next run.
+
+### Dirty Workflow Detection
+
+Editor must detect uncommitted changes and prompt user:
+
+```go
+// internal/workflows/dirty.go
+func (s *Store) Save(ctx context.Context, wf *Workflow, opts SaveOptions) error {
+    // Check if workflow file exists with uncommitted changes
+    existingPath := s.resolvePath(wf.Ref)
+    
+    if dirty, err := s.isDirty(ctx, existingPath); err == nil && dirty {
+        if !opts.Force {
+            return fmt.Errorf("workflow has uncommitted changes (use --force to overwrite)")
+        }
+    }
+    
+    // ... save logic
+}
+
+func (s *Store) isDirty(ctx context.Context, path string) (bool, error) {
+    // Check git status for file
+    status, err := s.git.Status(ctx, WithPath(path))
+    if err != nil {
+        return false, err
+    }
+    
+    // File is dirty if modified but not staged
+    for _, entry := range status.Entries {
+        if entry.Path == path && entry.Worktree != git.Unmodified {
+            return true, nil
+        }
+    }
+    return false, nil
+}
+```
+
+### Interrupt Handling
+
+Graceful shutdown on signals:
+
+```go
+// internal/runner/runner.go
+func (r *runner) Run(ctx context.Context, plan Plan) (RunResult, error) {
+    ctx, cancel := context.WithCancel(ctx)
+    defer cancel()
+    
+    // Listen for interrupt signals
+    sigChan := make(chan os.Signal, 1)
+    signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+    defer signal.Stop(sigChan)
+    
+    for i, step := range plan.Steps {
+        select {
+        case <-sigChan:
+            // Save state for resume
+            r.saveState(RunState{
+                Status:      RunStatusPaused,
+                CurrentStep: i,
+                // ... other fields
+            })
+            return RunResult{Canceled: true}, ErrCanceled
+            
+        case <-ctx.Done():
+            return RunResult{}, ctx.Err()
+            
+        default:
+            // Execute step
+            result := r.executeStep(ctx, step)
+            r.saveState(...) // Update after each step
+        }
+    }
+}
+```
+
+### Placeholder Value Persistence
+
+Per-workflow placeholder defaults can be cached locally (not in Git):
+
+```go
+// Stored in ~/.local/share/gitsavvy/params/<workflow-id>.json
+type ParamCache struct {
+    WorkflowID string            `json:"workflow_id"`
+    Values     map[string]string `json:"values"`
+    UpdatedAt  time.Time         `json:"updated_at"`
+}
+```
+
+Configured by `save_params` option:
+- `none`: Never save (default)
+- `session`: Save in memory only (cleared on exit)
+- `file`: Persist to local JSON file
+- `keychain`: Use OS keychain (future)
+
+### Sync State Tracking
+
+Track last sync to avoid redundant operations:
+
+```go
+// Stored in .gitsavvy/state.json (in repo, gitignored)
+type RepoState struct {
+    LastSyncAt   time.Time              `json:"last_sync_at"`
+    LastSyncHash string                  `json:"last_sync_hash"` // HEAD commit hash
+    IndexHash    string                  `json:"index_hash"`     // Hash of indexed workflows
+    Branch       string                  `json:"branch"`
+}
+
+func (s *Syncer) NeedsSync(ctx context.Context) (bool, error) {
+    state, err := s.loadRepoState()
+    if err != nil {
+        if errors.Is(err, ErrNotFound) {
+            return true, nil // Never synced
+        }
+        return false, err
+    }
+    
+    // Fetch without integrating
+    if err := s.git.Fetch(ctx, WithDryRun(true)); err != nil {
+        return false, err
+    }
+    
+    // Compare remote HEAD with last sync hash
+    remoteHEAD, _ := s.git.ResolveRef(ctx, "origin/main")
+    return remoteHEAD != state.LastSyncHash, nil
+}
+```
+
+### Cleanup Strategy
+
+Old run states and param caches should be cleaned up:
+
+```go
+// internal/app/cleanup.go
+func (a *App) Cleanup(ctx context.Context) error {
+    // Remove run states older than 30 days
+    cutoff := time.Now().AddDate(0, 0, -30)
+    
+    runsDir := filepath.Join(a.dataDir, "runs")
+    entries, _ := os.ReadDir(runsDir)
+    
+    for _, entry := range entries {
+        info, _ := entry.Info()
+        if info.ModTime().Before(cutoff) {
+            os.Remove(filepath.Join(runsDir, entry.Name()))
+        }
+    }
+    
+    // Cleanup is run automatically on:
+    // - gitsavvy sync (after successful sync)
+    // - gitsavvy init (on startup)
+    return nil
+}
+```
+
+---
+
+
+---
+
+## J) Shell Capture Specification (record command)
+
+### Overview
+
+The `record` command launches a subshell with injected hooks that capture executed commands to a temporary log file. When the user exits the subshell, commands are parsed and presented in a TUI editor for workflow creation.
+
+### Supported Shells (MVP)
+
+| Shell | Detection | Status | Notes |
+|-------|-----------|--------|-------|
+| bash  | `$SHELL`, `basename` | ✅ MVP | PROMPT_COMMAND hook |
+| zsh   | `$SHELL`, `basename` | ✅ MVP | precmd_function hook |
+| sh    | fallback | ⚠️ limited | No hooks, manual capture |
+| pwsh  | `$SHELL`, `pwsh` | ❌ v2+ | Different PSReadLine API |
+
+**MVP scope**: bash + zsh only. Explicit error for unsupported shells.
+
+### Architecture
+
+```
+gitsavvy record
+  │
+  ├─> Create temp capture file (/tmp/gitsavvy-record-<uuid>.log)
+  │
+  ├─> Inject shell hooks via --rcfile or temporary init script
+  │   └─> Hook runs after each command, appends to capture file
+  │
+  ├─> Spawn subshell with modified environment
+  │   └─> GITSAVVY_CAPTURE_FILE=/tmp/gitsavvy-record-<uuid>.log
+  │   └─> GITSAVVY_SESSION_ID=<uuid>
+  │   └─> PS1 mod (indicator we're recording)
+  │
+  └─> Wait for shell exit
+      │
+      └─> Read capture file
+          └─> Parse, normalize, present in TUI
+```
+
+### Capture File Format
+
+Simple line-oriented format:
+
+```
+<timestamp>|<cwd>|<command>
+<timestamp>|<cwd>|<command with|literal pipes|and special chars>
+```
+
+Example:
+```
+1738301234|/Users/chaz/projects/svc|kubectl get pods
+1738301245|/Users/chaz/projects/svc|kubectl delete pod web-1
+1738301250|/Users/chaz/projects/svc|vim config.yaml
+1738301300|/Users/chaz/projects/svc|git status
+```
+
+**Delimiter**: `|` is unlikely but not impossible in commands. Use `\x1F` (unit separator) if needed.
+
+**Timestamp**: Unix epoch (seconds). Enables ordering and deduplication.
+
+**CWD**: Current working directory for context (useful for workflows with `cwd` steps).
+
+### Shell Hook Implementation
+
+#### Bash (PROMPT_COMMAND)
+
+```bash
+# Injected via bash --rcfile <(generate_init_script)
+# or: bash -c 'source <(generate_init_script); exec bash'
+
+GITSAVVY_CAPTURE_FILE="/tmp/gitsavvy-record-<uuid>.log"
+
+_gitsavvy_capture() {
+    local cmd="$BASH_COMMAND"
+    local cwd="$(pwd)"
+    local ts="$(date +%s)"
+    
+    # Skip empty commands, duplicates, built-ins
+    [[ -z "$cmd" ]] && return
+    [[ "$cmd" == "$_GITSAVVY_LAST_CMD" ]] && return
+    
+    # Built-ins to skip (navigation, job control, etc.)
+    case "$cmd" in
+        cd|pushd|popd|dirs|pwd|ls|la|ll|clear|history|exit|logout) return ;;
+    esac
+    
+    echo "${ts}|${cwd}|${cmd}" >> "$GITSAVVY_CAPTURE_FILE"
+    _GITSAVVY_LAST_CMD="$cmd"
+}
+
+# Store command before execution
+trap '_gitsavvy_capture' DEBUG
+```
+
+**Why `trap DEBUG` instead of `PROMPT_COMMAND`?**
+- `PROMPT_COMMAND` runs BEFORE the prompt (after command completes)
+- `trap DEBUG` runs AFTER command completes, with access to `$BASH_COMMAND`
+- Actually, for capture we want PROMPT_COMMAND - it has the full command in history
+
+**Corrected bash approach:**
+
+```bash
+GITSAVVY_CAPTURE_FILE="/tmp/gitsavvy-record-<uuid>.log"
+GITSAVVY_LAST_LINE=""
+
+_gitsavvy_prompt_command() {
+    local cmd=$(history 1 | sed 's/^ *[0-9]* *//')
+    local cwd="$(pwd)"
+    local ts="$(date +%s)"
+    
+    # Skip empty, duplicates, built-ins
+    [[ -z "$cmd" ]] && return
+    [[ "$cmd" == "$GITSAVVY_LAST_LINE" ]] && return
+    
+    # Built-ins to skip
+    case "$cmd" in
+        cd|pushd|popd|dirs|pwd|ls|la|ll|clear|history|exit|logout|jobs|fg|bg) return ;;
+    esac
+    
+    echo "${ts}|${cwd}|${cmd}" >> "$GITSAVVY_CAPTURE_FILE"
+    GITSAVVY_LAST_LINE="$cmd"
+}
+
+# Hook into prompt
+PROMPT_COMMAND="_gitsavvy_prompt_command"
+```
+
+#### Zsh (precmd)
+
+```zsh
+GITSAVVY_CAPTURE_FILE="/tmp/gitsavvy-record-<uuid>.log"
+GITSAVVY_LAST_LINE=""
+
+_gitsavvy_precmd() {
+    local cmd="$history[$((HISTCMD-1))]"
+    local cwd="$(pwd)"
+    local ts="$(date +%s)"
+    
+    # Skip empty, duplicates, built-ins
+    [[ -z "$cmd" ]] && return
+    [[ "$cmd" == "$GITSAVVY_LAST_LINE" ]] && return
+    
+    # Built-ins to skip
+    case "$cmd" in
+        cd|pushd|popd|dirs|pwd|ls|la|ll|clear|history|exit|logout|jobs|fg|bg) return ;;
+    esac
+    
+    echo "${ts}|${cwd}|${cmd}" >> "$GITSAVVY_CAPTURE_FILE"
+    GITSAVVY_LAST_LINE="$cmd"
+}
+
+# Hook into zsh
+precmd_functions+=(_gitsavvy_precmd)
+```
+
+### Shell Invocation
+
+#### Detecting User's Shell
+
+```go
+func detectShell() string {
+    // 1. Check SHELL env var
+    if shell := os.Getenv("SHELL"); shell != "" {
+        return filepath.Base(shell)
+    }
+    
+    // 2. Fallback to /etc/passwd entry
+    if usr, err := user.Current(); err == nil {
+        return filepath.Base(usr.Shell)
+    }
+    
+    // 3. Default to bash
+    return "bash"
+}
+```
+
+#### Spawning the Recorded Shell
+
+```go
+func (r *Recorder) StartRecordingSession(ctx context.Context) error {
+    // 1. Create temp capture file
+    captureFile, err := os.CreateTemp("", "gitsavvy-record-*.log")
+    if err != nil {
+        return err
+    }
+    defer captureFile.Close()
+    
+    // 2. Generate shell init script
+    shell := detectShell()
+    initScript, err := r.generateInitScript(shell, captureFile.Name())
+    if err != nil {
+        return err
+    }
+    
+    // 3. Build command with appropriate flags
+    cmd := exec.CommandContext(ctx, shell, r.getShellFlags(shell, initScript)...)
+    
+    // 4. Set environment
+    cmd.Env = append(os.Environ(),
+        "GITSAVVY_CAPTURE_FILE="+captureFile.Name(),
+        "GITSAVVY_SESSION_ID="+uuid.New().String(),
+        "PS1="+r.modifiedPrompt(), // Add indicator
+    )
+    
+    // 5. Attach stdio for interactive use
+    cmd.Stdin = os.Stdin
+    cmd.Stdout = os.Stdout
+    cmd.Stderr = os.Stderr
+    
+    // 6. Run shell (blocks until exit)
+    if err := cmd.Run(); err != nil {
+        if exitErr, ok := err.(*exec.ExitError); ok {
+            // User exited normally with some code
+            return r.parseCaptureFile(captureFile.Name(), exitErr.ExitCode())
+        }
+        return err
+    }
+    
+    return r.parseCaptureFile(captureFile.Name(), 0)
+}
+
+func (r *Recorder) getShellFlags(shell, initScript string) []string {
+    switch shell {
+    case "bash":
+        // Use --rcfile to inject our hooks
+        return []string{"--rcfile", initScript, "-i"}
+    case "zsh":
+        // Zsh doesn't have --rcfile equivalent for interactive mode
+        // Use: zsh -i -c 'source /init/script; exec zsh'
+        return []string{"-i", "-c", fmt.Sprintf("source %s; exec zsh", initScript)}
+    default:
+        return []string{"-i"}
+    }
+}
+
+func (r *Recorder) modifiedPrompt() string {
+    // Add visual indicator we're recording
+    basePrompt := os.Getenv("PS1")
+    if basePrompt == "" {
+        basePrompt = "\\$ " // Fallback
+    }
+    return "[REC] " + basePrompt
+}
+```
+
+### Command Parsing & Normalization
+
+After shell exits, parse the capture file:
+
+```go
+type CapturedCommand struct {
+    Timestamp int64     `json:"timestamp"`
+    CWD       string    `json:"cwd"`
+    Command   string    `json:"command"`
+}
+
+func (r *Recorder) parseCaptureFile(path string, exitCode int) ([]CapturedCommand, error) {
+    file, err := os.Open(path)
+    if err != nil {
+        return nil, err
+    }
+    defer os.Remove(path) // Cleanup temp file
+    
+    var commands []CapturedCommand
+    scanner := bufio.NewScanner(file)
+    seen := make(map[string]bool) // Deduplicate
+    
+    for scanner.Scan() {
+        line := scanner.Text()
+        parts := strings.SplitN(line, "|", 3)
+        if len(parts) != 3 {
+            continue // Skip malformed lines
+        }
+        
+        ts, _ := strconv.ParseInt(parts[0], 10, 64)
+        cwd := parts[1]
+        cmd := parts[2]
+        
+        // Deduplicate
+        key := fmt.Sprintf("%s:%s", cwd, cmd)
+        if seen[key] {
+            continue
+        }
+        seen[key] = true
+        
+        commands = append(commands, CapturedCommand{
+            Timestamp: ts,
+            CWD:       cwd,
+            Command:   cmd,
+        })
+    }
+    
+    // Sort by timestamp
+    sort.Slice(commands, func(i, j int) bool {
+        return commands[i].Timestamp < commands[j].Timestamp
+    })
+    
+    if len(commands) == 0 {
+        return nil, fmt.Errorf("no commands captured (exit code: %d)", exitCode)
+    }
+    
+    return commands, nil
+}
+```
+
+### Alias Expansion
+
+The PRD mentions alias expansion. Implement after capture:
+
+```go
+func (r *Recorder) expandAliases(shell string, cmd string) (string, error) {
+    // Get alias definitions from current shell
+    var aliasCmd string
+    switch shell {
+    case "bash":
+        aliasCmd = "alias"
+    case "zsh":
+        aliasCmd = "alias -L"  // zsh uses -L for list in define form
+    }
+    
+    out, err := exec.Command(shell, "-c", aliasCmd).Output()
+    if err != nil {
+        return cmd, err // Return original if expansion fails
+    }
+    
+    // Parse alias definitions and build map
+    aliases := parseAliasOutput(string(out))
+    
+    // Simple prefix expansion (doesn't handle all edge cases)
+    for name, expansion := range aliases {
+        if strings.HasPrefix(cmd, name+" ") || cmd == name {
+            return strings.Replace(cmd, name, expansion, 1), nil
+        }
+    }
+    
+    return cmd, nil
+}
+```
+
+**Limitation**: This only handles simple `alias ll='ls -la'` cases. Complex aliases with arguments, functions, and completions are not expandable without executing the shell.
+
+### Edge Cases
+
+#### Multi-line Commands
+
+Commands with line continuations (`\`) or heredocs appear as multiple lines in history.
+
+**Strategy**: Reconstruct multi-line commands by:
+1. Tracking line continuation in the shell hook (complex)
+2. Post-processing: merge lines ending with `\`
+3. MVP: Accept multi-line commands as separate steps
+
+**MVP decision**: Treat as separate steps. User can merge in TUI editor.
+
+#### Commands with Special Characters
+
+Pipes, redirects, quotes, semicolons:
+
+```bash
+cat file.txt | grep pattern > output.txt & 
+```
+
+All captured as a single line (shell normalizes). No special handling needed.
+
+#### Empty Shell Session
+
+User types `exit` immediately or runs no commands.
+
+**Behavior**: 
+- Detect 0 commands in capture file
+- Show message: "No commands captured. Shell exited with code <code>."
+- Exit with code 13 (user canceled / nothing captured)
+
+#### Hook Failure
+
+Shell fails to load init script or hooks error.
+
+**Detection**:
+- Set a marker file: `/tmp/gitsavvy-ready-<uuid>`
+- Init script writes this on successful load
+- If missing on exit, warn user and offer options
+
+**Fallback**: Offer `record history` as alternative.
+
+#### Shell Not Installed
+
+Requested shell isn't available on system.
+
+**Detection**: `exec.LookPath(shell)` before spawning
+
+**Behavior**: 
+```bash
+Error: /bin/zsh not found. Available shells: /bin/bash, /bin/sh
+Use --shell bash to override.
+```
+
+### TUI Integration
+
+After capture and parsing, launch the Workflow Editor (see section E) with:
+
+- Pre-populated steps from captured commands
+- Timestamp info in metadata (for sorting)
+- CWD per step (if it varies)
+
+### Testing Strategy
+
+Unit tests for:
+- `parseCaptureFile()` with various inputs
+- `expandAliases()` with mock alias output
+- `detectShell()` with mocked env
+
+Integration tests:
+- Spawn a subshell with our init script
+- Execute commands programmatically via stdin
+- Verify capture file contents
+- Clean up subshell
+
+**Test fixture**: `testdata/capture/` with sample capture files.
+
+### Future Enhancements (Post-MVP)
+
+1. **Fish shell**: Use `fish_prompt` function
+2. **PowerShell**: Use `PSReadLine` history API
+3. **Function expansion**: Expand shell functions, not just aliases
+4. **Session replay**: Save full session with timing for demo workflows
+5. **Environment capture**: Capture env var changes between steps
+
