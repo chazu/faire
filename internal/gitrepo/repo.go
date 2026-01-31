@@ -10,6 +10,7 @@ import (
 	"context"
 	"fmt"
 	"os/exec"
+	"strconv"
 	"strings"
 )
 
@@ -59,10 +60,16 @@ type Repo interface {
 	GetConflicts(ctx context.Context) ([]string, error)
 
 	// Fetch fetches changes from a remote.
-	Fetch(ctx context.Context, remote string) error
+	Fetch(ctx context.Context, remote string) (FetchResult, error)
 
 	// Integrate integrates changes with the specified strategy.
 	Integrate(ctx context.Context, strategy IntegrateStrategy) (IntegrateResult, error)
+}
+
+// FetchResult contains the result of a fetch operation.
+type FetchResult struct {
+	// Fetched is the number of refs fetched.
+	Fetched int
 }
 
 // IntegrateStrategy specifies how to integrate remote changes.
@@ -287,18 +294,52 @@ func (r *gitRepo) GetConflicts(ctx context.Context) ([]string, error) {
 }
 
 // Fetch fetches changes from a remote.
-func (r *gitRepo) Fetch(ctx context.Context, remote string) error {
-	_, _, err := r.runGit(ctx, "fetch", remote)
-	return err
+func (r *gitRepo) Fetch(ctx context.Context, remote string) (FetchResult, error) {
+	result := FetchResult{}
+
+	// Use --verbose to get fetch output for counting
+	_, output, err := r.runGit(ctx, "fetch", remote, "--verbose")
+	if err != nil {
+		return result, err
+	}
+
+	// Parse output to count fetched refs
+	// Git fetch output format includes lines like:
+	//   * [new branch]      feature  -> origin/feature
+	//   * [new tag]         v1.0.0   -> v1.0.0
+	//   * [updated tag]     v1.0.0   -> v1.0.0
+	//   From origin
+	//      xxx..yyy  main       -> origin/main  (fast-forward)
+	lines := strings.Split(output, "\n")
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "* [new branch]") ||
+			strings.HasPrefix(trimmed, "* [new tag]") ||
+			strings.HasPrefix(trimmed, "* [updated tag]") ||
+			strings.Contains(trimmed, "->") {
+			result.Fetched++
+		}
+	}
+
+	return result, nil
 }
 
 // Integrate integrates changes with the specified strategy.
 func (r *gitRepo) Integrate(ctx context.Context, strategy IntegrateStrategy) (IntegrateResult, error) {
 	result := IntegrateResult{}
 
+	// Get the current HEAD before integration to count new commits later
+	_, beforeHash, err := r.runGit(ctx, "rev-parse", "HEAD")
+	if err != nil {
+		// HEAD might not exist yet (empty repo)
+		beforeHash = ""
+	} else {
+		beforeHash = strings.TrimSpace(beforeHash)
+	}
+
 	switch strategy {
 	case StrategyFFOnly:
-		_, _, err := r.runGit(ctx, "merge", "--ff-only")
+		_, _, err := r.runGit(ctx, "merge", "--ff-only", "@{u}")
 		if err != nil {
 			// Check if it's a conflict or just not fast-forwardable
 			if hasConflicts, _ := r.HasConflicts(ctx); hasConflicts {
@@ -321,7 +362,7 @@ func (r *gitRepo) Integrate(ctx context.Context, strategy IntegrateStrategy) (In
 		result.Rebased = true
 
 	case StrategyMerge:
-		_, _, err := r.runGit(ctx, "merge", "@{u}")
+		_, _, err := r.runGit(ctx, "merge", "@{u}", "--no-edit")
 		if err != nil {
 			if hasConflicts, _ := r.HasConflicts(ctx); hasConflicts {
 				result.Conflicts = true
@@ -335,5 +376,23 @@ func (r *gitRepo) Integrate(ctx context.Context, strategy IntegrateStrategy) (In
 		return result, fmt.Errorf("unknown strategy: %s", strategy)
 	}
 
+	// Count new commits if we had a before hash
+	if beforeHash != "" {
+		result.NewCommits, _ = r.countNewCommits(ctx, beforeHash)
+	}
+
 	return result, nil
+}
+
+// countNewCommits counts the number of commits between before and HEAD.
+func (r *gitRepo) countNewCommits(ctx context.Context, beforeHash string) (int, error) {
+	_, output, err := r.runGit(ctx, "rev-list", "--count", beforeHash+"..HEAD")
+	if err != nil {
+		return 0, err
+	}
+	count, err := strconv.Atoi(strings.TrimSpace(output))
+	if err != nil {
+		return 0, err
+	}
+	return count, nil
 }

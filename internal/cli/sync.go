@@ -114,9 +114,18 @@ func runSync(opts *SyncOptions) error {
 // fetchRemote fetches from the remote repository.
 func fetchRemote(ctx context.Context, repo gitrepo.Repo, remote string) error {
 	fmt.Printf("Fetching from %s...\n", remote)
-	// TODO: Implement actual fetch
-	// For now, just a placeholder
-	fmt.Println("✓ Fetch complete")
+
+	result, err := repo.Fetch(ctx, remote)
+	if err != nil {
+		return fmt.Errorf("fetch failed: %w", err)
+	}
+
+	if result.Fetched > 0 {
+		fmt.Printf("✓ Fetched %d ref(s)\n", result.Fetched)
+	} else {
+		fmt.Println("✓ Already up to date")
+	}
+
 	return nil
 }
 
@@ -257,7 +266,7 @@ func shouldRebuildIndex(ctx context.Context, repo gitrepo.Repo, cfg *config.Conf
 		return false
 	}
 
-	builder := index.NewBuilder(cfg.Repo.Path)
+	builder := index.NewBuilder(cfg.Repo.Path, cfg)
 	stale, err := builder.IsStale()
 	if err != nil {
 		// On error, try rebuilding
@@ -269,7 +278,7 @@ func shouldRebuildIndex(ctx context.Context, repo gitrepo.Repo, cfg *config.Conf
 // rebuildIndex rebuilds the search index.
 func rebuildIndex(ctx context.Context, repo gitrepo.Repo, cfg *config.Config) error {
 	fmt.Println("\nRebuilding search index...")
-	builder := index.NewBuilder(cfg.Repo.Path)
+	builder := index.NewBuilder(cfg.Repo.Path, cfg)
 
 	idx, err := builder.Build()
 	if err != nil {
