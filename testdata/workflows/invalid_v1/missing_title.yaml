@@ -1,0 +1,5 @@
+schema_version: 1
+# Missing title - should fail validation
+steps:
+  - name: Run command
+    command: echo "test"

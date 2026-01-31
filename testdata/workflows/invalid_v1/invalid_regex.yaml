@@ -1,0 +1,8 @@
+schema_version: 1
+title: Invalid Regex Workflow
+placeholders:
+  param:
+    prompt: "A parameter"
+    validate: "[invalid(regex"  # Unclosed bracket - invalid regex
+steps:
+  - command: "echo <param>"

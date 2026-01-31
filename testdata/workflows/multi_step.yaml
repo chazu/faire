@@ -1,0 +1,49 @@
+schema_version: 1
+id: wf_02ABC123DEF45678
+title: Multi-Step Deployment Workflow
+description: Complex deployment workflow with multiple steps, error handling, and environment variables
+tags: [deployment, kubernetes, production]
+
+defaults:
+  shell: zsh
+  cwd: /deploy
+  confirm_each_step: false
+
+placeholders:
+  environment:
+    prompt: "Deployment environment"
+    default: "staging"
+    validate: '^(dev|staging|prod)$'
+  version:
+    prompt: "Application version"
+    validate: '^v[0-9]+\.[0-9]+\.[0-9]+$'
+
+steps:
+  - name: Pre-flight checks
+    command: "kubectl cluster-info"
+    continue_on_error: false
+    confirmation: "Check cluster connectivity?"
+
+  - name: Set context
+    command: "kubectl config use-context <environment>"
+    env:
+      KUBECONFIG: "/etc/deploy/kubeconfig"
+
+  - name: Build container image
+    command: "docker build -t myapp:<version> ."
+    confirmation: "Build image for version <version>?"
+
+  - name: Push to registry
+    command: "docker push myapp:<version>"
+    continue_on_error: false
+
+  - name: Update deployment
+    command: "kubectl set image deployment/myapp myapp=myapp:<version> -n <environment>"
+    confirmation: true
+
+  - name: Verify rollout
+    command: "kubectl rollout status deployment/myapp -n <environment>"
+    continue_on_error: false
+
+  - name: Check pod health
+    command: "kubectl get pods -n <environment> -l app=myapp"
