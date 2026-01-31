@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 
 	"github.com/spf13/cobra"
 	"github.com/chazuruo/svf/internal/config"
@@ -87,9 +88,14 @@ func runSync(opts *SyncOptions) error {
 		strategy = cfg.Repo.SyncStrategy
 	}
 
-	result, err := integrateChanges(ctx, repo, strategy)
+	result, err := integrateChanges(ctx, repo, strategy, opts.Conflicts)
 	if err != nil {
 		return err
+	}
+
+	// Handle conflicts if detected
+	if result.Conflicts {
+		return handleConflicts(ctx, repo, opts.Conflicts, result)
 	}
 
 	// Show summary
@@ -116,33 +122,120 @@ func fetchRemote(ctx context.Context, repo gitrepo.Repo, remote string) error {
 
 // IntegrateResult contains the result of an integrate operation.
 type IntegrateResult struct {
-	FastForward bool
-	Rebased     bool
-	Merged      bool
-	Conflicts   bool
-	NewCommits  int
+	FastForward    bool
+	Rebased        bool
+	Merged         bool
+	Conflicts      bool
+	NewCommits     int
+	ConflictFiles  []string
 }
 
 // integrateChanges integrates remote changes.
-func integrateChanges(ctx context.Context, repo gitrepo.Repo, strategy string) (*IntegrateResult, error) {
+func integrateChanges(ctx context.Context, repo gitrepo.Repo, strategy string, conflictsMode string) (*IntegrateResult, error) {
 	result := &IntegrateResult{}
 
+	// Convert strategy string to gitrepo.IntegrateStrategy
+	var integrateStrategy gitrepo.IntegrateStrategy
 	switch strategy {
 	case "ff-only", "ff_only":
-		// Fast-forward only
-		result.FastForward = true
+		integrateStrategy = gitrepo.StrategyFFOnly
 	case "rebase":
-		// Rebase
-		result.Rebased = true
+		integrateStrategy = gitrepo.StrategyRebase
 	case "merge":
-		// Merge
-		result.Merged = true
+		integrateStrategy = gitrepo.StrategyMerge
 	default:
 		return nil, fmt.Errorf("unknown strategy: %s", strategy)
 	}
 
+	// Perform integration using gitrepo.Integrate
+	// Note: This will fail if conflicts are detected
+	grResult, err := repo.Integrate(ctx, integrateStrategy)
+	if err != nil {
+		// Check if it's a conflict error
+		if hasConflicts, _ := repo.HasConflicts(ctx); hasConflicts {
+			// Return result with conflicts marked
+			result.Conflicts = true
+			result.ConflictFiles, _ = repo.GetConflicts(ctx)
+			return result, fmt.Errorf("conflicts detected during integration")
+		}
+		return nil, err
+	}
+
+	// Copy results from gitrepo result
+	result.FastForward = grResult.FastForward
+	result.Rebased = grResult.Rebased
+	result.Merged = grResult.Merged
+	result.Conflicts = grResult.Conflicts
+	result.NewCommits = grResult.NewCommits
+	result.ConflictFiles = grResult.ConflictFiles
+
 	fmt.Println("✓ Integration complete")
 	return result, nil
+}
+
+// handleConflicts handles conflicts based on the specified mode.
+func handleConflicts(ctx context.Context, repo gitrepo.Repo, mode string, result *IntegrateResult) error {
+	switch mode {
+	case "ours":
+		// Accept ours for all conflicts
+		return resolveAllConflicts(ctx, repo, "ours")
+	case "theirs":
+		// Accept theirs for all conflicts
+		return resolveAllConflicts(ctx, repo, "theirs")
+	case "abort":
+		// Abort the integration
+		return fmt.Errorf("integration aborted due to conflicts")
+	case "tui", "":
+		// Launch TUI conflict resolver
+		return launchConflictResolver(ctx, repo, result)
+	default:
+		return fmt.Errorf("unknown conflicts mode: %s", mode)
+	}
+}
+
+// resolveAllConflicts resolves all conflicts using the specified strategy.
+func resolveAllConflicts(ctx context.Context, repo gitrepo.Repo, strategy string) error {
+	conflicts, err := repo.GetConflicts(ctx)
+	if err != nil {
+		return err
+	}
+
+	fmt.Printf("Resolving %d conflict(s) using '%s' strategy...\n", len(conflicts), strategy)
+
+	for _, file := range conflicts {
+		// Use git checkout to accept ours or theirs
+		var cmd *exec.Cmd
+		if strategy == "ours" {
+			cmd = exec.Command("git", "checkout", "--ours", file)
+		} else {
+			cmd = exec.Command("git", "checkout", "--theirs", file)
+		}
+
+		if err := cmd.Run(); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: failed to resolve %s\n", file)
+		}
+
+		// Mark as resolved
+		cmd = exec.Command("git", "add", file)
+		_ = cmd.Run()
+	}
+
+	fmt.Println("✓ All conflicts resolved")
+	return nil
+}
+
+// launchConflictResolver launches the TUI conflict resolver.
+func launchConflictResolver(ctx context.Context, repo gitrepo.Repo, result *IntegrateResult) error {
+	// TODO: Integrate with TUI conflict resolver model
+	// For now, show instructions
+	conflicts, _ := repo.GetConflicts(ctx)
+	fmt.Printf("\n%d conflict(s) detected:\n", len(conflicts))
+	for _, file := range conflicts {
+		fmt.Printf("  - %s\n", file)
+	}
+	fmt.Println("\nPlease resolve conflicts manually, then run 'svf sync' again.")
+	fmt.Println("Or use --conflicts=ours or --conflicts=theirs to auto-resolve.")
+	return nil
 }
 
 // printSyncSummary prints a summary of the sync operation.
