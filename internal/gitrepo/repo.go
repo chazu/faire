@@ -392,7 +392,7 @@ func (r *gitRepo) checkForConflicts(ctx context.Context, remoteBranch string) (b
 
 		// Check if it's a conflict error
 		if strings.Contains(output, "CONFLICT") || strings.Contains(output, "Automatic merge failed") {
-			return r.parseConflictFiles(output), nil
+			return true, r.parseConflictFiles(output)
 		}
 		// Other errors (e.g., divergent branches) are not conflicts
 		return false, nil
@@ -436,7 +436,7 @@ func (r *gitRepo) fastForward(ctx context.Context, remoteBranch string, result I
 	result.NewFiles, result.UpdatedFiles, result.DeletedFiles = r.parseMergeChanges(output)
 
 	// Get current HEAD
-	hash, _ := r.runGit(ctx, "rev-parse", "HEAD")
+	_, hash, _ := r.runGit(ctx, "rev-parse", "HEAD")
 	result.CommitHash = strings.TrimSpace(hash)
 
 	return result, nil
@@ -464,7 +464,7 @@ func (r *gitRepo) rebase(ctx context.Context, remoteBranch string, result Integr
 	result.NewFiles, result.UpdatedFiles, result.DeletedFiles = r.parseRebaseChanges(output)
 
 	// Get current HEAD
-	hash, _ := r.runGit(ctx, "rev-parse", "HEAD")
+	_, hash, _ := r.runGit(ctx, "rev-parse", "HEAD")
 	result.CommitHash = strings.TrimSpace(hash)
 
 	return result, nil
@@ -492,7 +492,7 @@ func (r *gitRepo) merge(ctx context.Context, remoteBranch string, result Integra
 	result.NewFiles, result.UpdatedFiles, result.DeletedFiles = r.parseMergeChanges(output)
 
 	// Get current HEAD
-	hash, _ := r.runGit(ctx, "rev-parse", "HEAD")
+	_, hash, _ := r.runGit(ctx, "rev-parse", "HEAD")
 	result.CommitHash = strings.TrimSpace(hash)
 
 	return result, nil

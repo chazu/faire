@@ -15,6 +15,7 @@ import (
 // NewSyncCommand creates the sync command for fetching and integrating remote changes.
 func NewSyncCommand() *cobra.Command {
 	opts := &app.SyncOptions{}
+	strategyStr := ""
 
 	cmd := &cobra.Command{
 		Use:   "sync",
@@ -34,11 +35,16 @@ Examples:
   gitsavvy sync --no-push          # Sync but don't push
   gitsavvy sync --json             # Output in JSON format`,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			// Convert strategy string to IntegrationStrategy
+			if strategyStr != "" {
+				opts.Strategy = gitrepo.IntegrationStrategy(strategyStr)
+			}
 			return runSync(cmd.Context(), opts)
 		},
 	}
 
-	cmd.Flags().StringVar(&opts.Strategy, "strategy", "", "integration strategy: ff-only, rebase, merge")
+	cmd.Flags().StringVar(&opts.ConfigPath, "config", "", "config file path")
+	cmd.Flags().StringVar(&strategyStr, "strategy", "", "integration strategy: ff-only, rebase, merge")
 	cmd.Flags().StringVar(&opts.Remote, "remote", "", "git remote name (default from config)")
 	cmd.Flags().StringVar(&opts.Branch, "branch", "", "remote branch name (default from config)")
 	cmd.Flags().BoolVar(&opts.NoFetch, "no-fetch", false, "skip fetch step")
