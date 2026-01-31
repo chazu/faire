@@ -1,317 +1,123 @@
-// Package cli provides Cobra command definitions for svf.
+// Package cli provides Cobra command definitions for faire.
 package cli
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 
-	"github.com/chazuruo/svf/internal/config"
-	"github.com/chazuruo/svf/internal/gitrepo"
-	"github.com/chazuruo/svf/internal/index"
-	"github.com/chazuruo/svf/internal/tui"
 	"github.com/spf13/cobra"
+	"github.com/chazuruo/faire/internal/app"
+	"github.com/chazuruo/faire/internal/gitrepo"
 )
 
-// SyncOptions contains the options for the sync command.
-type SyncOptions struct {
-	ConfigPath string
-	Strategy   string
-	Remote     string
-	Branch     string
-	NoPush     bool
-	Push       bool
-	Conflicts  string
-	Reindex    bool
-}
-
-// NewSyncCommand creates the sync command.
+// NewSyncCommand creates the sync command for fetching and integrating remote changes.
 func NewSyncCommand() *cobra.Command {
-	opts := &SyncOptions{}
+	opts := &app.SyncOptions{}
 
 	cmd := &cobra.Command{
 		Use:   "sync",
-		Short: "Synchronize with remote Git repository",
-		Long: `Fetch and integrate changes from the remote repository.
+		Short: "Fetch and integrate remote changes",
+		Long: `Fetch changes from the remote repository and integrate them using the configured strategy.
 
-Updates the local checkout and rebuilds the search index.
-Supports different integration strategies (ff-only, rebase, merge).`,
+The sync command performs a git fetch followed by integration using one of three strategies:
+- ff-only: Only fast-forward, fail if not possible
+- rebase: Rebase local commits on top of remote
+- merge: Merge remote changes into local branch
+
+The default strategy is configured in config.toml (repo.sync_strategy), defaulting to "rebase".
+
+Examples:
+  gitsavvy sync                    # Sync with default settings
+  gitsavvy sync --strategy merge   # Use merge strategy
+  gitsavvy sync --no-push          # Sync but don't push
+  gitsavvy sync --json             # Output in JSON format`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runSync(opts)
+			return runSync(cmd.Context(), opts)
 		},
 	}
 
-	cmd.Flags().StringVar(&opts.ConfigPath, "config", "", "config file path")
-	cmd.Flags().StringVar(&opts.Strategy, "strategy", "", "integration strategy: ff-only, rebase, merge (default from config)")
-	cmd.Flags().StringVar(&opts.Remote, "remote", "", "remote name (default: origin)")
-	cmd.Flags().StringVar(&opts.Branch, "branch", "", "branch name (default from config)")
-	cmd.Flags().BoolVar(&opts.NoPush, "no-push", false, "do not push local commits")
-	cmd.Flags().BoolVar(&opts.Push, "push", false, "push after successful integrate")
-	cmd.Flags().StringVar(&opts.Conflicts, "conflicts", "tui", "conflict resolution: tui, ours, theirs, abort")
-	cmd.Flags().BoolVar(&opts.Reindex, "reindex", false, "force rebuild of search index")
+	cmd.Flags().StringVar(&opts.Strategy, "strategy", "", "integration strategy: ff-only, rebase, merge")
+	cmd.Flags().StringVar(&opts.Remote, "remote", "", "git remote name (default from config)")
+	cmd.Flags().StringVar(&opts.Branch, "branch", "", "remote branch name (default from config)")
+	cmd.Flags().BoolVar(&opts.NoFetch, "no-fetch", false, "skip fetch step")
+	cmd.Flags().BoolVar(&opts.NoPush, "no-push", false, "skip pushing after sync")
+	cmd.Flags().BoolVar(&opts.Push, "push", false, "push after successful sync")
+	cmd.Flags().BoolVar(&opts.JSONOutput, "json", false, "output in JSON format")
 
 	return cmd
 }
 
-func runSync(opts *SyncOptions) error {
-	ctx := context.Background()
-
-	// Load config
-	cfg, err := config.LoadWithDefaults()
-	if err != nil {
-		return fmt.Errorf("failed to load config: %w", err)
+func runSync(ctx context.Context, opts *app.SyncOptions) error {
+	result, err := app.Sync(ctx, *opts)
+	if err != nil && !gitrepo.IsConflictError(err) {
+		// For non-conflict errors, return the error
+		return fmt.Errorf("sync failed: %w", err)
 	}
 
-	// Open repo
-	repo := gitrepo.New(cfg.Repo.Path)
-
-	// Check if repo is initialized
-	if !repo.IsInitialized(ctx) {
-		return fmt.Errorf("repository not initialized. Run 'svf init' first")
+	if opts.JSONOutput {
+		return printSyncJSON(result)
 	}
 
-	fmt.Println("Syncing with remote...")
+	printSyncPlain(result)
 
-	// Fetch from remote
-	remote := opts.Remote
-	if remote == "" {
-		remote = cfg.Repo.Remote
-	}
-
-	if err := fetchRemote(ctx, repo, remote); err != nil {
-		return err
-	}
-
-	// Integrate changes
-	strategy := opts.Strategy
-	if strategy == "" {
-		strategy = cfg.Repo.SyncStrategy
-	}
-
-	result, err := integrateChanges(ctx, repo, strategy, opts.Conflicts)
-	if err != nil {
-		return err
-	}
-
-	// Handle conflicts if detected
-	if result.Conflicts {
-		return handleConflicts(ctx, repo, opts.Conflicts, result)
-	}
-
-	// Show summary
-	printSyncSummary(result)
-
-	// Rebuild index if needed or requested
-	if opts.Reindex || shouldRebuildIndex(ctx, repo, cfg) {
-		if err := rebuildIndex(ctx, repo, cfg); err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: failed to rebuild index: %v\n", err)
+	// Exit codes: 0 ok, 10 git failure, 12 conflicts unresolved
+	if !result.Success {
+		if len(result.Conflicts) > 0 {
+			os.Exit(12)
 		}
+		os.Exit(10)
 	}
 
 	return nil
 }
 
-// fetchRemote fetches from the remote repository.
-func fetchRemote(ctx context.Context, repo gitrepo.Repo, remote string) error {
-	fmt.Printf("Fetching from %s...\n", remote)
+// printSyncPlain prints sync result in plain text format.
+func printSyncPlain(result *app.SyncOutput) {
+	if result.Success {
+		fmt.Println("Sync complete")
+		fmt.Println()
+		fmt.Printf("Branch: %s (%s)\n", result.Branch, result.RemoteBranch)
+		fmt.Printf("Strategy: %s\n", result.Strategy)
+		fmt.Printf("Ahead: %d, Behind: %d\n", result.Ahead, result.Behind)
+		fmt.Println()
 
-	result, err := repo.Fetch(ctx, remote)
-	if err != nil {
-		return fmt.Errorf("fetch failed: %w", err)
-	}
-
-	if result.Fetched > 0 {
-		fmt.Printf("✓ Fetched %d ref(s)\n", result.Fetched)
+		if len(result.NewFiles) > 0 || len(result.UpdatedFiles) > 0 || len(result.DeletedFiles) > 0 {
+			fmt.Println("Changes:")
+			for _, f := range result.NewFiles {
+				fmt.Printf("  + %s\n", f)
+			}
+			for _, f := range result.UpdatedFiles {
+				fmt.Printf("  ~ %s\n", f)
+			}
+			for _, f := range result.DeletedFiles {
+				fmt.Printf("  - %s\n", f)
+			}
+		}
 	} else {
-		fmt.Println("✓ Already up to date")
-	}
+		fmt.Println("Sync failed")
+		fmt.Println()
+		fmt.Printf("Branch: %s (%s)\n", result.Branch, result.RemoteBranch)
+		fmt.Printf("Strategy: %s\n", result.Strategy)
+		fmt.Println()
 
-	return nil
-}
-
-// IntegrateResult contains the result of an integrate operation.
-type IntegrateResult struct {
-	FastForward   bool
-	Rebased       bool
-	Merged        bool
-	Conflicts     bool
-	NewCommits    int
-	ConflictFiles []string
-}
-
-// integrateChanges integrates remote changes.
-func integrateChanges(ctx context.Context, repo gitrepo.Repo, strategy string, conflictsMode string) (*IntegrateResult, error) {
-	result := &IntegrateResult{}
-
-	// Convert strategy string to gitrepo.IntegrateStrategy
-	var integrateStrategy gitrepo.IntegrateStrategy
-	switch strategy {
-	case "ff-only", "ff_only":
-		integrateStrategy = gitrepo.StrategyFFOnly
-	case "rebase":
-		integrateStrategy = gitrepo.StrategyRebase
-	case "merge":
-		integrateStrategy = gitrepo.StrategyMerge
-	default:
-		return nil, fmt.Errorf("unknown strategy: %s", strategy)
-	}
-
-	// Perform integration using gitrepo.Integrate
-	// Note: This will fail if conflicts are detected
-	grResult, err := repo.Integrate(ctx, integrateStrategy)
-	if err != nil {
-		// Check if it's a conflict error
-		if hasConflicts, _ := repo.HasConflicts(ctx); hasConflicts {
-			// Return result with conflicts marked
-			result.Conflicts = true
-			result.ConflictFiles, _ = repo.GetConflicts(ctx)
-			return result, fmt.Errorf("conflicts detected during integration")
+		if len(result.Conflicts) > 0 {
+			fmt.Println("Conflicts:")
+			for _, f := range result.Conflicts {
+				fmt.Printf("  ✗ %s\n", f)
+			}
+			fmt.Println()
+			fmt.Println("Run 'gitsavvy sync --resolve' to resolve conflicts")
+		} else if result.Error != "" {
+			fmt.Printf("Error: %s\n", result.Error)
 		}
-		return nil, err
-	}
-
-	// Copy results from gitrepo result
-	result.FastForward = grResult.FastForward
-	result.Rebased = grResult.Rebased
-	result.Merged = grResult.Merged
-	result.Conflicts = grResult.Conflicts
-	result.NewCommits = grResult.NewCommits
-	result.ConflictFiles = grResult.ConflictFiles
-
-	fmt.Println("✓ Integration complete")
-	return result, nil
-}
-
-// handleConflicts handles conflicts based on the specified mode.
-func handleConflicts(ctx context.Context, repo gitrepo.Repo, mode string, result *IntegrateResult) error {
-	switch mode {
-	case "ours":
-		// Accept ours for all conflicts
-		return resolveAllConflicts(ctx, repo, "ours")
-	case "theirs":
-		// Accept theirs for all conflicts
-		return resolveAllConflicts(ctx, repo, "theirs")
-	case "abort":
-		// Abort the integration
-		return fmt.Errorf("integration aborted due to conflicts")
-	case "tui", "":
-		// Launch TUI conflict resolver
-		return launchConflictResolver(ctx, repo, result)
-	default:
-		return fmt.Errorf("unknown conflicts mode: %s", mode)
 	}
 }
 
-// resolveAllConflicts resolves all conflicts using the specified strategy.
-func resolveAllConflicts(ctx context.Context, repo gitrepo.Repo, strategy string) error {
-	conflicts, err := repo.GetConflicts(ctx)
-	if err != nil {
-		return err
-	}
-
-	fmt.Printf("Resolving %d conflict(s) using '%s' strategy...\n", len(conflicts), strategy)
-
-	for _, file := range conflicts {
-		// Use git checkout to accept ours or theirs
-		var cmd *exec.Cmd
-		if strategy == "ours" {
-			cmd = exec.Command("git", "checkout", "--ours", file)
-		} else {
-			cmd = exec.Command("git", "checkout", "--theirs", file)
-		}
-
-		if err := cmd.Run(); err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: failed to resolve %s\n", file)
-		}
-
-		// Mark as resolved
-		cmd = exec.Command("git", "add", file)
-		_ = cmd.Run()
-	}
-
-	fmt.Println("✓ All conflicts resolved")
-	return nil
-}
-
-// launchConflictResolver launches the TUI conflict resolver.
-func launchConflictResolver(ctx context.Context, repo gitrepo.Repo, result *IntegrateResult) error {
-	conflicts, err := repo.GetConflicts(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to get conflicts: %w", err)
-	}
-
-	if len(conflicts) == 0 {
-		return nil
-	}
-
-	// Run the TUI conflict resolver
-	tuiResult, err := tui.RunConflictResolver(conflicts)
-	if err != nil {
-		return fmt.Errorf("conflict resolver failed: %w", err)
-	}
-
-	// Handle the result
-	if tuiResult.Aborted {
-		return fmt.Errorf("conflict resolution aborted")
-	}
-
-	// Show summary
-	fmt.Printf("\n✓ Resolved %d/%d conflicts\n", tuiResult.ResolvedCount, tuiResult.TotalCount)
-
-	if tuiResult.ResolvedCount == tuiResult.TotalCount {
-		fmt.Println("All conflicts resolved! You can now continue working.")
-		fmt.Println("Run 'svf sync' again to complete the sync if needed.")
-	} else {
-		fmt.Println("Some conflicts remain unresolved.")
-		fmt.Println("Run 'svf sync' again to continue resolving.")
-	}
-
-	return nil
-}
-
-// printSyncSummary prints a summary of the sync operation.
-func printSyncSummary(result *IntegrateResult) {
-	fmt.Println("\nSync Summary:")
-	if result.NewCommits > 0 {
-		fmt.Printf("  New commits: %d\n", result.NewCommits)
-	}
-	if result.Conflicts {
-		fmt.Println("  Conflicts detected - please resolve manually")
-	} else {
-		fmt.Println("  No conflicts")
-	}
-}
-
-// shouldRebuildIndex checks if the search index needs rebuilding.
-func shouldRebuildIndex(ctx context.Context, repo gitrepo.Repo, cfg *config.Config) bool {
-	if !cfg.Workflows.Index.AutoRebuild {
-		return false
-	}
-
-	builder := index.NewBuilder(cfg.Repo.Path, cfg)
-	stale, err := builder.IsStale()
-	if err != nil {
-		// On error, try rebuilding
-		return true
-	}
-	return stale
-}
-
-// rebuildIndex rebuilds the search index.
-func rebuildIndex(ctx context.Context, repo gitrepo.Repo, cfg *config.Config) error {
-	fmt.Println("\nRebuilding search index...")
-	builder := index.NewBuilder(cfg.Repo.Path, cfg)
-
-	idx, err := builder.Build()
-	if err != nil {
-		return fmt.Errorf("building index: %w", err)
-	}
-
-	if err := builder.Save(idx); err != nil {
-		return fmt.Errorf("saving index: %w", err)
-	}
-
-	fmt.Printf("✓ Index updated with %d workflows\n", len(idx.Workflows))
-	return nil
+// printSyncJSON prints sync result in JSON format.
+func printSyncJSON(result *app.SyncOutput) error {
+	enc := json.NewEncoder(os.Stdout)
+	enc.SetIndent("", "  ")
+	return enc.Encode(result)
 }
