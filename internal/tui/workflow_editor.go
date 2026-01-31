@@ -75,7 +75,7 @@ func NewWorkflowEditor(ctx context.Context, wf *workflows.Workflow) WorkflowEdit
 		if name == "" {
 			name = fmt.Sprintf("Step %d", i+1)
 		}
-		items[i] = stepItem{index: i, name: name, command: step.Command}
+		items[i] = editorStepItem{index: i, name: name}
 	}
 
 	li := list.New(items, stepDelegate{}, 0, 0)
@@ -338,7 +338,7 @@ func (m *WorkflowEditorModel) updateStepItems() {
 		if name == "" {
 			name = fmt.Sprintf("Step %d", i+1)
 		}
-		items[i] = stepItem{index: i, name: name, command: step.Command}
+		items[i] = editorStepItem{index: i, name: name}
 	}
 	m.steps.SetItems(items)
 }
@@ -421,29 +421,22 @@ func (m WorkflowEditorModel) renderFooter() string {
 	return helpStyle.Render(help)
 }
 
-// stepItem represents a workflow step in the list.
-type stepItem struct {
-	index   int
-	name    string
-	command string
+// editorStepItem represents a workflow step in the editor list.
+type editorStepItem struct {
+	index int
+	name  string
 }
 
-func (s stepItem) Title() string {
+func (s editorStepItem) Title() string {
 	return s.name
 }
 
-func (s stepItem) Description() string {
-	// Truncate command if too long
-	const maxLen = 50
-	cmd := s.command
-	if len(cmd) > maxLen {
-		cmd = cmd[:maxLen] + "..."
-	}
-	return cmd
+func (s editorStepItem) Description() string {
+	return ""
 }
 
-func (s stepItem) FilterValue() string {
-	return s.name + " " + s.command
+func (s editorStepItem) FilterValue() string {
+	return s.name
 }
 
 // stepDelegate defines how steps are rendered in the list.
@@ -453,7 +446,7 @@ func (d stepDelegate) Height() int                               { return 1 }
 func (d stepDelegate) Spacing() int                              { return 0 }
 func (d stepDelegate) Update(msg tea.Msg, m *list.Model) tea.Cmd { return nil }
 func (d stepDelegate) Render(w io.Writer, m list.Model, index int, listItem list.Item) {
-	s, ok := listItem.(stepItem)
+	s, ok := listItem.(editorStepItem)
 	if !ok {
 		return
 	}
