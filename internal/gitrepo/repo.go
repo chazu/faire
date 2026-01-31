@@ -154,43 +154,7 @@ func (r *gitRepo) runGit(ctx context.Context, args ...string) (*exec.Cmd, string
 	return cmd, string(output), nil
 }
 
-// IsInitialized returns true if the repository is already initialized.
-func (r *gitRepo) IsInitialized(ctx context.Context) bool {
-	_, _, err := r.runGit(ctx, "rev-parse", "--git-dir")
-	return err == nil
-}
-
-// Init initializes a new Git repository.
-func (r *gitRepo) Init(ctx context.Context, opts InitOptions) error {
-	args := []string{"init"}
-	if opts.Bare {
-		args = append(args, "--bare")
-	}
-	_, _, err := r.runGit(ctx, args...)
-	return err
-}
-
-// Status returns the current status of the repository.
-func (r *gitRepo) Status(ctx context.Context) (Status, error) {
-	var status Status
-	_, output, err := r.runGit(ctx, "status", "--porcelain=v2", "--branch")
-	if err != nil {
-		return status, err
-	}
-
-	// Parse branch info and check for dirty state
-	lines := strings.Split(output, "\n")
-	for _, line := range lines {
-		if strings.HasPrefix(line, "# branch.head ") {
-			status.Branch = strings.TrimPrefix(line, "# branch.head ")
-		} else if line != "" && !strings.HasPrefix(line, "#") {
-			// Any non-empty, non-comment line means there are changes
-			status.Dirty = true
-		}
-	}
-
-	return status, nil
-}
+// Init, IsInitialized, and Status methods are in init.go and status.go.
 
 // Add stages a specific file for commit.
 func (r *gitRepo) Add(ctx context.Context, path string) error {
