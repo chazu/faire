@@ -1,96 +1,170 @@
 # svf
 
-A Git-backed workflow automation tool, compatible with Savvy CLI but without any proprietary SaaS dependency. All workflows and metadata live in a Git repository of your choice.
+Git-backed workflow automation tool. Compatible with Savvy CLI workflows but stores all data in your own Git repository—no proprietary SaaS required.
 
 ## Features
 
-- **Configuration management**: Initialize with `svf init` (TUI wizard or scriptable)
-- **Workflow editing**: Create/edit workflows with `svf edit` (TUI editor)
-- **Workflow listing**: List all workflows with `svf list`
-- **Workflow viewing**: View workflow details with `svf view`
-- **Shell history**: Pick commands from shell history with `svf record history`
-- **Session recording**: Record shell sessions with `svf record`
-- **Status**: Show repository and tool status with `svf status`
-- **Sync**: Synchronize with remote Git repository with `svf sync`
-- **Placeholder support**: Parameter substitution with `<param>` syntax
-- **LLM-friendly**: All commands support `--no-tui` for automation
+- **Record workflows** from shell history or interactive subshell sessions
+- **Run workflows** interactively with step-by-step confirmation
+- **Parameter support** with placeholders like `<param>` for dynamic values
+- **Sync via Git**—standard clone, pull, push, and PR workflows
+- **AI-assisted workflow generation** (opt-in, provider-agnostic)
+- **Export workflows** to Markdown, YAML, or JSON
+- **TUI editor** for creating and editing workflows with Bubble Tea
+- **Team collaboration** through Git branching and code review
+- **Offline-first**—everything works locally without network access
 
-## Quick Start
+## Installation
 
-```bash
-# Initialize configuration
-svf init
-
-# Edit or create a workflow
-svf edit
-
-# List all workflows
-svf list
-
-# View a workflow
-svf view my-workflow
-
-# Sync with remote
-svf sync
-```
-
-## Building
-
-### Prerequisites
-
-- Go 1.24 or later
-- Make (optional, but recommended)
-
-### Build from source
+### From Source
 
 ```bash
-# Clone the repository
-git clone https://github.com/chazu/svf.git
-cd svf
-
-# Build using Make
+git clone https://github.com/chazu/faire.git
+cd faire
 make build
 
 # The binary will be created at ./bin/svf
+sudo make install  # Optional: install to /usr/local/bin
 ```
 
-### Build manually
+### Build Options
 
 ```bash
-go build -ldflags "-X main.Version=$(git describe --tags --always) -X main.Commit=$(git rev-parse --short HEAD) -X main.Date=$(date -u +'%Y-%m-%dT%H:%M:%SZ')" -o bin/svf ./cmd/svf
+# Standard build
+make build
+
+# Build for specific platform
+GOOS=linux GOARCH=amd64 make build
+
+# Build with version info
+make build VERSION=v1.0.0
 ```
 
-## Development
+## Quick Start
 
-### Run tests
+### 1. Initialize
 
 ```bash
-make test
+svf init
 ```
 
-### Format code
+This will:
+- Create a configuration file at `~/.config/svf/config.toml`
+- Prompt you to select or create a Git repository for workflows
+- Set up your identity path (e.g., `chaz` or `platform/chaz`)
+
+### 2. Create Your First Workflow
+
+From shell history:
+```bash
+svf record history
+```
+
+Or record a live session:
+```bash
+svf record
+# Execute commands in the subshell
+exit
+# Edit and save the workflow
+```
+
+### 3. Run a Workflow
 
 ```bash
-make fmt
+svf run <workflow-name>
 ```
 
-### Run linter
+### 4. Sync with Your Team
 
 ```bash
-make lint
+cd ~/.local/share/svf/repo
+git pull
 ```
 
-### Run go vet
-
+Or use the built-in sync (coming soon):
 ```bash
-make vet
+svf sync
 ```
 
-### Clean build artifacts
+## Commands
 
-```bash
-make clean
+| Command | Description |
+|---------|-------------|
+| `init` | Initialize configuration and workflow repository |
+| `whoami` | Show current identity and configuration |
+| `record` | Start an interactive subshell to capture commands |
+| `record history` | Create workflow from shell history |
+| `run <workflow>` | Execute a workflow interactively |
+| `list` | List available workflows |
+| `edit <workflow>` | Open workflow in TUI editor |
+| `export <workflow>` | Export workflow to Markdown/YAML/JSON |
+| `sync` | Pull/push workflow repository changes |
+
+## Configuration
+
+The configuration file is located at `~/.config/svf/config.toml`.
+
+Key configuration options:
+
+```toml
+[repo]
+path = "~/.local/share/svf/repo"  # Workflow repository location
+remote = "origin"                       # Git remote name
+branch = "main"                         # Default branch
+
+[identity]
+path = "chaz"                           # Your claimed path (write target)
+mode = "pr"                             # "direct" or "pr" for contributions
+
+[workflows]
+root = "workflows"                      # Path to user workflows
+shared_root = "shared"                  # Path to shared workflows
+
+[runner]
+default_shell = "zsh"                   # Default shell for steps
+confirm_each_step = true                # Prompt before each step
 ```
+
+See [configuration.md](docs/configuration.md) for complete reference.
+
+## Workflow Example
+
+A workflow is defined as YAML:
+
+```yaml
+schema_version: 1
+title: "Deploy to Production"
+description: "Deploy application after running tests"
+tags: ["deployment", "production"]
+
+defaults:
+  shell: "bash"
+  confirm_each_step: true
+
+placeholders:
+  environment:
+    prompt: "Which environment?"
+    default: "staging"
+    validate: "^(staging|production)$"
+
+steps:
+  - name: "Run tests"
+    command: "go test ./..."
+
+  - name: "Build docker image"
+    command: "docker build -t myapp:<environment> ."
+
+  - name: "Deploy"
+    command: "kubectl apply -f deployment.yaml"
+    confirmation: "Ready to deploy to <environment>?"
+```
+
+## Documentation
+
+- [Workflows Guide](docs/workflows.md) - Creating and managing workflows
+- [Configuration Reference](docs/configuration.md) - All config options
+- [CI/CD Integration](docs/automation.md) - Using svf in automation
+- [Contributing](CONTRIBUTING.md) - Development setup and contribution guidelines
 
 ## Project Structure
 
@@ -102,53 +176,45 @@ make clean
 │   ├── app/               # Root orchestrator
 │   ├── cli/               # Cobra command definitions
 │   ├── config/            # Config loading/validation
-│   ├── gitrepo/           # Git operations
+│   ├── gitrepo/           # Git operations wrapper
 │   ├── workflows/         # Workflow model and store
-│   ├── runner/            # Command execution
+│   ├── index/             # Search index
+│   ├── runner/            # Command execution engine
 │   ├── history/           # Shell history parsers
 │   ├── recorder/          # Subshell session capture
-│   ├── placeholders/      # Parameter parsing
-│   ├── tui/               # Bubble Tea UI components
-│   └── errors/            # Error handling
+│   ├── placeholders/      # Parameter parsing and substitution
+│   ├── export/            # Markdown/YAML/JSON export
+│   ├── ai/                # AI provider interface
+│   └── tui/               # Bubble Tea UI components
 ├── testdata/              # Test fixtures
-└── .beads/                # Issue tracking (bd)
+├── docs/                  # Documentation
+└── Makefile               # Build targets
 ```
 
-## Configuration
+## Development
 
-The configuration file is stored at `~/.config/svf/config.toml`:
-
-```toml
-[repo]
-path = "/path/to/workflows/repo"
-remote = "origin"
-branch = "main"
-sync_strategy = "rebase"
-
-[identity]
-path = "username"          # Your identity path in the repo
-mode = "pr"                 # "direct" or "pr"
-
-[git]
-author_name = "Your Name"
-author_email = "you@example.com"
-
-[workflows]
-root = "workflows"
-shared_root = "shared"
-```
-
-## LLM Automation
-
-All commands support `--no-tui` for non-interactive usage:
+### Run Tests
 
 ```bash
-# Non-TUI mode for automation
-svf --no-tui list --format json
-svf --no-tui view my-workflow --md
+make test
+```
 
-# Pipe workflow to edit command
-echo "$WORKFLOW_YAML" | svf --no-tui edit
+### Format Code
+
+```bash
+make fmt
+```
+
+### Run Linter
+
+```bash
+make lint
+```
+
+### Clean Build Artifacts
+
+```bash
+make clean
 ```
 
 ## Version
@@ -159,4 +225,9 @@ svf --version
 
 ## License
 
-TBD
+MIT License - see [LICENSE](LICENSE) file.
+
+## Acknowledgments
+
+- Inspired by [Savvy CLI](https://github.com/getsavvyinc/savvy-cli)
+- Built with [Cobra](https://github.com/spf13/cobra) and [Bubble Tea](https://github.com/charmbracelet/bubbletea)
