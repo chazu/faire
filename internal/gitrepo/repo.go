@@ -53,11 +53,38 @@ type Repo interface {
 	// GetConfig reads a git config value.
 	GetConfig(ctx context.Context, key string) (string, error)
 
+	// GetConflictFiles returns a list of files with merge conflicts.
+	GetConflictFiles(ctx context.Context) ([]string, error)
+
 	// HasConflicts returns true if there are unresolved merge/rebase conflicts.
 	HasConflicts(ctx context.Context) (bool, error)
 
 	// GetConflicts returns the list of files with unresolved conflicts.
 	GetConflicts(ctx context.Context) ([]string, error)
+
+	// GetConflictDetails retrieves detailed conflict information for a file.
+	GetConflictDetails(ctx context.Context, path string) (ConflictFile, error)
+
+	// GetDiff generates a diff for the specified file.
+	GetDiff(ctx context.Context, path string, diffType DiffType) (DiffContent, error)
+
+	// ResolveFile resolves a conflict in the specified file.
+	ResolveFile(ctx context.Context, path string, choice ResolutionChoice) error
+
+	// GetMergeState returns the current merge/rebase state.
+	GetMergeState(ctx context.Context) (MergeState, error)
+
+	// AbortMerge aborts the current merge operation.
+	AbortMerge(ctx context.Context) error
+
+	// AbortRebase aborts the current rebase operation.
+	AbortRebase(ctx context.Context) error
+
+	// ContinueMerge continues the current merge operation.
+	ContinueMerge(ctx context.Context) error
+
+	// ContinueRebase continues the current rebase operation.
+	ContinueRebase(ctx context.Context) error
 
 	// Fetch fetches changes from a remote.
 	Fetch(ctx context.Context, remote string) (FetchResult, error)
@@ -98,6 +125,7 @@ type IntegrateResult struct {
 	NewCommits int
 	// ConflictFiles contains the list of files with conflicts.
 	ConflictFiles []string
+}
 }
 
 // InitOptions contains options for initializing a repository.
