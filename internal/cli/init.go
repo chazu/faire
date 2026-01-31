@@ -198,6 +198,11 @@ func runInitInteractive(opts *InitOptions) error {
 		return fmt.Errorf("config validation failed: %w", err)
 	}
 
+	// Create folder structure
+	if err := createFolderStructure(localPath, finalCfg); err != nil {
+		return err
+	}
+
 	// Write config
 	if err := writeConfigSpinner(finalCfg); err != nil {
 		return err
@@ -265,6 +270,11 @@ func runInitNonInteractive(opts *InitOptions) error {
 	// Validate
 	if err := cfg.Validate(); err != nil {
 		return fmt.Errorf("config validation failed: %w", err)
+	}
+
+	// Create folder structure
+	if err := createFolderStructure(cfg.Repo.Path, cfg); err != nil {
+		return fmt.Errorf("failed to create folder structure: %w", err)
 	}
 
 	// Write config
@@ -344,6 +354,44 @@ func initGitRepo(path, branch string) error {
 	}
 
 	fmt.Println("✓ Git repository initialized")
+	return nil
+}
+
+// createFolderStructure creates the necessary folder structure for svf.
+func createFolderStructure(repoPath string, cfg *config.Config) error {
+	fmt.Println("Creating folder structure...")
+
+	// Create workflows directory
+	workflowsDir := filepath.Join(repoPath, cfg.Workflows.Root)
+	if err := os.MkdirAll(workflowsDir, 0755); err != nil {
+		return fmt.Errorf("failed to create workflows directory: %w", err)
+	}
+
+	// Create identity path directory
+	identityDir := filepath.Join(workflowsDir, cfg.Identity.Path)
+	if err := os.MkdirAll(identityDir, 0755); err != nil {
+		return fmt.Errorf("failed to create identity directory: %w", err)
+	}
+
+	// Create shared directory
+	sharedDir := filepath.Join(repoPath, cfg.Workflows.SharedRoot)
+	if err := os.MkdirAll(sharedDir, 0755); err != nil {
+		return fmt.Errorf("failed to create shared directory: %w", err)
+	}
+
+	// Create drafts directory
+	draftsDir := filepath.Join(repoPath, cfg.Workflows.DraftRoot)
+	if err := os.MkdirAll(draftsDir, 0755); err != nil {
+		return fmt.Errorf("failed to create drafts directory: %w", err)
+	}
+
+	// Create .svf directory for index
+	svfDir := filepath.Join(repoPath, ".svf")
+	if err := os.MkdirAll(svfDir, 0755); err != nil {
+		return fmt.Errorf("failed to create .svf directory: %w", err)
+	}
+
+	fmt.Println("✓ Folder structure created")
 	return nil
 }
 

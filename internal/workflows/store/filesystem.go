@@ -54,6 +54,25 @@ func (s *FileSystemStore) List(ctx context.Context, filter Filter) ([]WorkflowRe
 
 	// Walk workflows directory
 	workflowRoot := filepath.Join(s.repo.Path(), s.config.Workflows.Root)
+
+	// Check if workflows directory exists
+	if _, err := os.Stat(workflowRoot); os.IsNotExist(err) {
+		// Directory doesn't exist - create it and return empty list
+		if err := os.MkdirAll(workflowRoot, 0755); err != nil {
+			return nil, fmt.Errorf("workflows directory does not exist and could not be created: %w", err)
+		}
+		// Also create identity directory
+		identityPath := s.config.Identity.Path
+		if identityPath == "" {
+			identityPath = "default"
+		}
+		identityDir := filepath.Join(workflowRoot, identityPath)
+		if err := os.MkdirAll(identityDir, 0755); err != nil {
+			return nil, fmt.Errorf("could not create identity directory: %w", err)
+		}
+		return refs, nil
+	}
+
 	err := filepath.Walk(workflowRoot, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
