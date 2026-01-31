@@ -25,7 +25,7 @@ func main() {
 but stores all workflows and metadata in a Git repository instead of a hosted backend.`,
 		Version: fmt.Sprintf("%s (commit: %s, built: %s)", Version, Commit, Date),
 		Run: func(cmd *cobra.Command, args []string) {
-			cmd.Help()
+			_ = cmd.Help()
 		},
 	}
 

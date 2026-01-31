@@ -48,7 +48,7 @@ func (c *Checker) CheckLatest(ctx context.Context) (*Release, error) {
 	if err != nil {
 		return nil, NewError(ExitNetworkError, "Failed to fetch releases", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)

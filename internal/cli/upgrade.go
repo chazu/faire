@@ -109,7 +109,7 @@ func runUpgrade(ctx context.Context, checkOnly, yes, pre, noVerify bool) error {
 	if !yes {
 		fmt.Print("\nInstall update? [y/N] ")
 		var response string
-		fmt.Scanln(&response)
+		_, _ = fmt.Scanln(&response)
 		if response != "y" && response != "Y" {
 			fmt.Println("Update cancelled")
 			return nil
@@ -135,7 +135,7 @@ func installUpdate(ctx context.Context, binaryPath string, release *upgrade.Rele
 	if err != nil {
 		return fmt.Errorf("failed to create temp directory: %w", err)
 	}
-	defer os.RemoveAll(tempDir)
+	defer func() { _ = os.RemoveAll(tempDir) }()
 
 	// Download
 	downloader := upgrade.NewDownloader()

@@ -34,7 +34,7 @@ func (i *Installer) Install(archivePath string) error {
 		return NewError(ExitInstallError, "Failed to create temp directory", err)
 	}
 	i.tempDir = tempDir
-	defer os.RemoveAll(tempDir)
+	defer func() { _ = os.RemoveAll(tempDir) }()
 
 	// Extract binary from archive
 	binaryPath, err := i.extractBinary(archivePath, tempDir)
@@ -82,13 +82,13 @@ func (i *Installer) extractTarGz(archivePath, destDir string) (string, error) {
 	if err != nil {
 		return "", NewError(ExitInstallError, "Failed to open archive", err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	gzr, err := gzip.NewReader(f)
 	if err != nil {
 		return "", NewError(ExitInstallError, "Failed to read gzip", err)
 	}
-	defer gzr.Close()
+	defer func() { _ = gzr.Close() }()
 
 	tr := tar.NewReader(gzr)
 
@@ -131,7 +131,7 @@ func (i *Installer) extractZip(archivePath, destDir string) (string, error) {
 	if err != nil {
 		return "", NewError(ExitInstallError, "Failed to open zip", err)
 	}
-	defer r.Close()
+	defer func() { _ = r.Close() }()
 
 	binaryName := filepath.Base(i.currentBinaryPath)
 
@@ -152,10 +152,10 @@ func (i *Installer) extractZip(archivePath, destDir string) (string, error) {
 		}
 
 		if err := extractFile(rc, destPath, f.Mode()); err != nil {
-			rc.Close()
+			_ = rc.Close()
 			return "", err
 		}
-		rc.Close()
+		_ = rc.Close()
 
 		return destPath, nil
 	}
@@ -169,7 +169,7 @@ func extractFile(src io.Reader, destPath string, mode os.FileMode) error {
 	if err != nil {
 		return NewError(ExitInstallError, "Failed to create file", err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	if _, err := io.Copy(f, src); err != nil {
 		return NewError(ExitInstallError, "Failed to write file", err)
@@ -193,13 +193,13 @@ func (i *Installer) Backup() error {
 	if err != nil {
 		return err
 	}
-	defer src.Close()
+	defer func() { _ = src.Close() }()
 
 	dst, err := os.OpenFile(i.backupPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0755)
 	if err != nil {
 		return err
 	}
-	defer dst.Close()
+	defer func() { _ = dst.Close() }()
 
 	if _, err := io.Copy(dst, src); err != nil {
 		return err
@@ -233,13 +233,13 @@ func copyFile(src, dst string, perm os.FileMode) error {
 	if err != nil {
 		return err
 	}
-	defer srcFile.Close()
+	defer func() { _ = srcFile.Close() }()
 
 	dstFile, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, perm)
 	if err != nil {
 		return err
 	}
-	defer dstFile.Close()
+	defer func() { _ = dstFile.Close() }()
 
 	if _, err := io.Copy(dstFile, srcFile); err != nil {
 		return err
@@ -275,10 +275,10 @@ func (i *Installer) Rollback() {
 	}
 
 	// Remove failed binary
-	os.Remove(i.currentBinaryPath)
+	_ = os.Remove(i.currentBinaryPath)
 
 	// Restore backup
-	copyFile(i.backupPath, i.currentBinaryPath, 0755)
+	_ = copyFile(i.backupPath, i.currentBinaryPath, 0755)
 
 	// Clean up backup
 	i.cleanupBackup()
@@ -287,7 +287,7 @@ func (i *Installer) Rollback() {
 // cleanupBackup removes the backup file.
 func (i *Installer) cleanupBackup() {
 	if i.backupPath != "" {
-		os.Remove(i.backupPath)
+		_ = os.Remove(i.backupPath)
 		i.backupPath = ""
 	}
 }
@@ -295,7 +295,7 @@ func (i *Installer) cleanupBackup() {
 // Cleanup removes any temporary files.
 func (i *Installer) Cleanup() {
 	if i.tempDir != "" {
-		os.RemoveAll(i.tempDir)
+		_ = os.RemoveAll(i.tempDir)
 		i.tempDir = ""
 	}
 	i.cleanupBackup()

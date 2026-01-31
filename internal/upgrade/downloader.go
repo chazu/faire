@@ -66,7 +66,7 @@ func (d *Downloader) downloadAttempt(ctx context.Context, url, destPath string) 
 	if err != nil {
 		return NewError(ExitNetworkError, "Failed to download", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return NewError(ExitNetworkError, fmt.Sprintf("Download failed with status %d", resp.StatusCode), nil)
@@ -82,7 +82,7 @@ func (d *Downloader) downloadAttempt(ctx context.Context, url, destPath string) 
 	if err != nil {
 		return NewError(ExitGenericError, "Failed to create file", err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	// Download with progress tracking
 	total := resp.ContentLength
@@ -156,7 +156,7 @@ func (d *Downloader) fileSHA256(filePath string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	hash := sha256.New()
 	if _, err := io.Copy(hash, f); err != nil {
