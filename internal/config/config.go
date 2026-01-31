@@ -98,6 +98,15 @@ type WorkflowsConfig struct {
 
 	// SchemaVersion is the workflow schema version.
 	SchemaVersion int `toml:"schema_version"`
+
+	// Index contains search index settings.
+	Index IndexConfig `toml:"index"`
+}
+
+// IndexConfig contains search index settings.
+type IndexConfig struct {
+	// AutoRebuild controls whether to automatically rebuild the index after sync.
+	AutoRebuild bool `toml:"auto_rebuild"`
 }
 
 // RunnerConfig contains workflow runner settings.
@@ -220,6 +229,9 @@ func DefaultConfig() *Config {
 			DraftRoot:    "drafts",
 			IndexPath:    ".svf/index.json",
 			SchemaVersion: 1,
+			Index: IndexConfig{
+				AutoRebuild: true,
+			},
 		},
 		Runner: RunnerConfig{
 			DefaultShell:             defaultShell,

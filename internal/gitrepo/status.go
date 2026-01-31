@@ -65,6 +65,12 @@ func (r *gitRepo) Status(ctx context.Context) (Status, error) {
 
 				status.Entries = append(status.Entries, entry)
 				status.Dirty = true
+
+				// Check for conflicts: both X and Y are 'U' (unmerged)
+				if entry.X == 'U' && entry.Y == 'U' {
+					status.Conflicted = true
+					status.Conflicts = append(status.Conflicts, entry.Path)
+				}
 			}
 		}
 	}

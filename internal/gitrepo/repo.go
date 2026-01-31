@@ -51,6 +51,46 @@ type Repo interface {
 
 	// GetConfig reads a git config value.
 	GetConfig(ctx context.Context, key string) (string, error)
+
+	// HasConflicts returns true if there are unresolved merge/rebase conflicts.
+	HasConflicts(ctx context.Context) (bool, error)
+
+	// GetConflicts returns the list of files with unresolved conflicts.
+	GetConflicts(ctx context.Context) ([]string, error)
+
+	// Fetch fetches changes from a remote.
+	Fetch(ctx context.Context, remote string) error
+
+	// Integrate integrates changes with the specified strategy.
+	Integrate(ctx context.Context, strategy IntegrateStrategy) (IntegrateResult, error)
+}
+
+// IntegrateStrategy specifies how to integrate remote changes.
+type IntegrateStrategy string
+
+const (
+	// StrategyFFOnly is fast-forward only (fail if not possible).
+	StrategyFFOnly IntegrateStrategy = "ff-only"
+	// StrategyRebase rebases local commits on top of remote.
+	StrategyRebase IntegrateStrategy = "rebase"
+	// StrategyMerge creates a merge commit.
+	StrategyMerge IntegrateStrategy = "merge"
+)
+
+// IntegrateResult contains the result of an integrate operation.
+type IntegrateResult struct {
+	// FastForward is true if the operation fast-forwarded.
+	FastForward bool
+	// Rebased is true if the operation rebased.
+	Rebased bool
+	// Merged is true if the operation merged.
+	Merged bool
+	// Conflicts is true if conflicts were detected.
+	Conflicts bool
+	// NewCommits is the number of new commits integrated.
+	NewCommits int
+	// ConflictFiles contains the list of files with conflicts.
+	ConflictFiles []string
 }
 
 // InitOptions contains options for initializing a repository.
@@ -73,6 +113,10 @@ type Status struct {
 	Behind int
 	// Entries contains detailed status entries for each changed file.
 	Entries []StatusEntry
+	// Conflicted is true if there are merge/rebase conflicts.
+	Conflicted bool
+	// Conflicts contains the list of conflicted files.
+	Conflicts []string
 }
 
 // StatusEntry represents a single file's status.
@@ -216,4 +260,80 @@ func (r *gitRepo) GetConfig(ctx context.Context, key string) (string, error) {
 		return "", err
 	}
 	return strings.TrimSpace(output), nil
+}
+
+// HasConflicts returns true if there are unresolved merge/rebase conflicts.
+func (r *gitRepo) HasConflicts(ctx context.Context) (bool, error) {
+	conflicts, err := r.GetConflicts(ctx)
+	if err != nil {
+		return false, err
+	}
+	return len(conflicts) > 0, nil
+}
+
+// GetConflicts returns the list of files with unresolved conflicts.
+func (r *gitRepo) GetConflicts(ctx context.Context) ([]string, error) {
+	_, output, err := r.runGit(ctx, "diff", "--name-only", "--diff-filter=U")
+	if err != nil {
+		return nil, err
+	}
+
+	output = strings.TrimSpace(output)
+	if output == "" {
+		return []string{}, nil
+	}
+
+	return strings.Split(output, "\n"), nil
+}
+
+// Fetch fetches changes from a remote.
+func (r *gitRepo) Fetch(ctx context.Context, remote string) error {
+	_, _, err := r.runGit(ctx, "fetch", remote)
+	return err
+}
+
+// Integrate integrates changes with the specified strategy.
+func (r *gitRepo) Integrate(ctx context.Context, strategy IntegrateStrategy) (IntegrateResult, error) {
+	result := IntegrateResult{}
+
+	switch strategy {
+	case StrategyFFOnly:
+		_, _, err := r.runGit(ctx, "merge", "--ff-only")
+		if err != nil {
+			// Check if it's a conflict or just not fast-forwardable
+			if hasConflicts, _ := r.HasConflicts(ctx); hasConflicts {
+				result.Conflicts = true
+				result.ConflictFiles, _ = r.GetConflicts(ctx)
+			}
+			return result, err
+		}
+		result.FastForward = true
+
+	case StrategyRebase:
+		_, _, err := r.runGit(ctx, "rebase", "@{u}")
+		if err != nil {
+			if hasConflicts, _ := r.HasConflicts(ctx); hasConflicts {
+				result.Conflicts = true
+				result.ConflictFiles, _ = r.GetConflicts(ctx)
+			}
+			return result, err
+		}
+		result.Rebased = true
+
+	case StrategyMerge:
+		_, _, err := r.runGit(ctx, "merge", "@{u}")
+		if err != nil {
+			if hasConflicts, _ := r.HasConflicts(ctx); hasConflicts {
+				result.Conflicts = true
+				result.ConflictFiles, _ = r.GetConflicts(ctx)
+			}
+			return result, err
+		}
+		result.Merged = true
+
+	default:
+		return result, fmt.Errorf("unknown strategy: %s", strategy)
+	}
+
+	return result, nil
 }

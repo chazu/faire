@@ -2,38 +2,78 @@
 package explain
 
 import (
+	"context"
 	"fmt"
 	"regexp"
 	"strings"
+
+	"github.com/chazuruo/svf/internal/ai"
+	"github.com/chazuruo/svf/internal/workflows"
 )
 
-// Explainer provides rule-based command explanations.
+// Explainer provides rule-based command explanations with optional AI integration.
 type Explainer struct {
-	rules []Rule
+	rules    []Rule
+	provider ai.Provider
+	offline  bool
+}
+
+// Options for creating an explainer.
+type Options struct {
+	Provider ai.Provider
+	Offline  bool
+}
+
+// NewExplainer creates a new explainer with built-in rules.
+func NewExplainer(opts *Options) *Explainer {
+	if opts == nil {
+		opts = &Options{}
+	}
+
+	return &Explainer{
+		rules:    builtinRules(),
+		provider: opts.Provider,
+		offline:  opts.Offline,
+	}
 }
 
 // Rule defines an explanation rule for command patterns.
 type Rule struct {
-	Pattern   string         // Regex pattern to match
-	Explanation string       // Explanation template
-	Risk      string         // Risk level (safe, low, medium, high)
-	Category  string         // Command category (git, docker, kubectl, etc.)
-}
-
-// NewExplainer creates a new explainer with built-in rules.
-func NewExplainer() *Explainer {
-	return &Explainer{
-		rules: builtinRules(),
-	}
+	Pattern    string // Regex pattern to match
+	Explanation string // Explanation template
+	Risk       string // Risk level (safe, low, medium, high)
+	Category   string // Command category (git, docker, kubectl, etc.)
 }
 
 // ExplainCommand explains a single command.
-func (e *Explainer) ExplainCommand(cmd string) Explanation {
+func (e *Explainer) ExplainCommand(ctx context.Context, cmd string) Explanation {
+	// Try AI provider first if available and not in offline mode
+	if e.provider != nil && !e.offline {
+		result, err := e.explainWithAI(ctx, cmd, CommandExplanation)
+		if err == nil {
+			return result
+		}
+		// Fall back to rule-based on AI error
+	}
+
 	return e.explain(cmd, CommandExplanation)
 }
 
 // ExplainWorkflowStep explains a workflow step in context.
-func (e *Explainer) ExplainWorkflowStep(stepName, command string, stepIndex int) Explanation {
+func (e *Explainer) ExplainWorkflowStep(ctx context.Context, stepName, command string, stepIndex int) Explanation {
+	// Try AI provider first if available and not in offline mode
+	if e.provider != nil && !e.offline {
+		result, err := e.explainWithAI(ctx, command, StepExplanation)
+		if err == nil {
+			// Add context
+			result.Context = fmt.Sprintf("Step %d: %s", stepIndex+1, stepName)
+			result.StepName = stepName
+			result.StepIndex = stepIndex
+			return result
+		}
+		// Fall back to rule-based on AI error
+	}
+
 	explanation := e.explain(command, CommandExplanation)
 
 	// Add context
@@ -42,6 +82,46 @@ func (e *Explainer) ExplainWorkflowStep(stepName, command string, stepIndex int)
 	explanation.StepIndex = stepIndex
 
 	return explanation
+}
+
+// ExplainWorkflow explains an entire workflow using AI.
+func (e *Explainer) ExplainWorkflow(ctx context.Context, wf *workflows.Workflow, detailLevel ai.DetailLevel) (string, error) {
+	if e.provider == nil {
+		return "", fmt.Errorf("AI provider not configured (use --offline for rule-based only)")
+	}
+
+	if e.offline {
+		return "", fmt.Errorf("offline mode enabled (remove --offline flag to use AI)")
+	}
+
+	req := ai.ExplainRequest{
+		Type:        ai.ExplainWorkflow,
+		Workflow:    wf,
+		DetailLevel: detailLevel,
+	}
+
+	return e.provider.Explain(ctx, req)
+}
+
+// explainWithAI uses the AI provider for explanation.
+func (e *Explainer) explainWithAI(ctx context.Context, cmd string, explainType ExplainType) (Explanation, error) {
+	req := ai.ExplainRequest{
+		Type:        ai.ExplainCommand,
+		Command:     cmd,
+		DetailLevel: ai.DetailNormal,
+	}
+
+	result, err := e.provider.Explain(ctx, req)
+	if err != nil {
+		return Explanation{}, err
+	}
+
+	return Explanation{
+		Command:     cmd,
+		Explanation: result,
+		Risk:        "unknown", // AI doesn't provide risk level
+		Category:    "ai-generated",
+	}, nil
 }
 
 // ExplainType is what to explain.

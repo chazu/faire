@@ -4,10 +4,12 @@ package cli
 import (
 	"context"
 	"fmt"
+	"os"
 
 	"github.com/spf13/cobra"
 	"github.com/chazuruo/svf/internal/config"
 	"github.com/chazuruo/svf/internal/gitrepo"
+	"github.com/chazuruo/svf/internal/index"
 )
 
 // SyncOptions contains the options for the sync command.
@@ -19,6 +21,7 @@ type SyncOptions struct {
 	NoPush     bool
 	Push       bool
 	Conflicts  string
+	Reindex    bool
 }
 
 // NewSyncCommand creates the sync command.
@@ -44,6 +47,7 @@ Supports different integration strategies (ff-only, rebase, merge).`,
 	cmd.Flags().BoolVar(&opts.NoPush, "no-push", false, "do not push local commits")
 	cmd.Flags().BoolVar(&opts.Push, "push", false, "push after successful integrate")
 	cmd.Flags().StringVar(&opts.Conflicts, "conflicts", "tui", "conflict resolution: tui, ours, theirs, abort")
+	cmd.Flags().BoolVar(&opts.Reindex, "reindex", false, "force rebuild of search index")
 
 	return cmd
 }
@@ -90,6 +94,13 @@ func runSync(opts *SyncOptions) error {
 
 	// Show summary
 	printSyncSummary(result)
+
+	// Rebuild index if needed or requested
+	if opts.Reindex || shouldRebuildIndex(ctx, repo, cfg) {
+		if err := rebuildIndex(ctx, repo, cfg); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: failed to rebuild index: %v\n", err)
+		}
+	}
 
 	return nil
 }
@@ -145,4 +156,37 @@ func printSyncSummary(result *IntegrateResult) {
 	} else {
 		fmt.Println("  No conflicts")
 	}
+}
+
+// shouldRebuildIndex checks if the search index needs rebuilding.
+func shouldRebuildIndex(ctx context.Context, repo gitrepo.Repo, cfg *config.Config) bool {
+	if !cfg.Workflows.Index.AutoRebuild {
+		return false
+	}
+
+	builder := index.NewBuilder(cfg.Repo.Path)
+	stale, err := builder.IsStale()
+	if err != nil {
+		// On error, try rebuilding
+		return true
+	}
+	return stale
+}
+
+// rebuildIndex rebuilds the search index.
+func rebuildIndex(ctx context.Context, repo gitrepo.Repo, cfg *config.Config) error {
+	fmt.Println("\nRebuilding search index...")
+	builder := index.NewBuilder(cfg.Repo.Path)
+
+	idx, err := builder.Build()
+	if err != nil {
+		return fmt.Errorf("building index: %w", err)
+	}
+
+	if err := builder.Save(idx); err != nil {
+		return fmt.Errorf("saving index: %w", err)
+	}
+
+	fmt.Printf("✓ Index updated with %d workflows\n", len(idx.Workflows))
+	return nil
 }
