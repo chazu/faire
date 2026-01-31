@@ -59,6 +59,7 @@ func Substitute(s string, values map[string]string) (string, error) {
 }
 
 // ExtractFromWorkflow extracts all placeholders from a workflow.
+// This is a placeholder that will be implemented when needed.
 func ExtractFromWorkflow(workflow interface{}) map[string]string {
 	// TODO: Implement extraction from workflow
 	// For now, return empty map

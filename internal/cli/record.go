@@ -11,7 +11,6 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/chazuruo/svf/internal/history"
 	"github.com/chazuruo/svf/internal/recorder"
-	"github.com/chazuruo/svf/internal/tui"
 )
 
 // RecordOptions contains the options for the record command.
@@ -220,13 +219,23 @@ func runRecordHistory(opts *RecordHistoryOptions) error {
 		return nil
 	}
 
-	// Launch history picker TUI
-	_ = tui.NewHistoryPickerModel(commands)
+	// Check for --no-tui mode
+	if IsNoTUI() {
+		// Non-TUI mode: show all commands and exit
+		for i, cmd := range commands {
+			fmt.Printf("%d. %s\n", i+1, cmd.Command)
+		}
+		return nil
+	}
 
-	// Run the picker
-	// TODO: Actually run the TUI
+	// TODO: Launch history picker TUI when Bubble Tea integration is complete
+	// picker := tui.NewHistoryPickerModel(commands)
+	// p := tea.NewProgram(picker, tea.WithAltScreen())
+	// finalModel, err := p.Run()
+
 	// For now, just show what we got
 	fmt.Printf("Found %d commands in %s history\n", len(commands), shell)
+	fmt.Println("(TUI picker will be implemented in a future update)")
 
 	return nil
 }
