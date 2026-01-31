@@ -1,9 +1,12 @@
-.PHONY: all build test test-coverage test-short run clean fmt vet lint help
+.PHONY: all build test test-coverage test-short run clean fmt vet lint help release-all checksums
 
 # Build variables
 BINARY_NAME=svf
 MAIN_PATH=./cmd/svf
 BUILD_DIR=./bin
+DIST_DIR=./dist
+# Supported platforms for release builds
+PLATFORMS:=linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64
 VERSION?=$(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 COMMIT?=$(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 BUILD_DATE?=$(shell date -u +"%Y-%m-%dT%H:%M:%SZ")
@@ -23,12 +26,35 @@ SRC=$(shell find . -name "*.go" -type f)
 ## all: Default target - build binary
 all: build
 
-## build: Compile the binary
+## build: Compile the binary for current platform
 build:
 	@echo "Building $(BINARY_NAME)..."
 	@mkdir -p $(BUILD_DIR)
 	$(GOBUILD) $(LDFLAGS) -o $(BUILD_DIR)/$(BINARY_NAME) $(MAIN_PATH)
 	@echo "Built $(BUILD_DIR)/$(BINARY_NAME)"
+
+## release-all: Build binaries for all supported platforms
+release-all:
+	@echo "Building release binaries for all platforms..."
+	@mkdir -p $(DIST_DIR)
+	@$(foreach platform,$(PLATFORMS), \
+		echo "Building $(platform)..."; \
+		GOOS=$(word 1,$(subst /, ,$(platform))) \
+		GOARCH=$(word 2,$(subst /, ,$(platform))) \
+		$(GOBUILD) $(LDFLAGS) -o $(DIST_DIR)/$(BINARY_NAME)-$(VERSION)-$(subst /,-,$(platform)) $(MAIN_PATH); \
+	)
+	@echo "Release builds complete in $(DIST_DIR)"
+
+## checksums: Generate SHA256 checksums for release artifacts
+checksums: release-all
+	@echo "Generating SHA256 checksums..."
+	@cd $(DIST_DIR) && \
+		for file in $(BINARY_NAME)-$(VERSION)-*; do \
+			if [ -f "$$file" ]; then \
+				shasum -a 256 "$$file" >> $(BINARY_NAME)-$(VERSION)-sha256.txt; \
+			fi \
+		done
+	@echo "Checksums generated in $(DIST_DIR)/$(BINARY_NAME)-$(VERSION)-sha256.txt"
 
 ## test: Run all tests with verbose output and race detector
 test:
@@ -52,7 +78,7 @@ run: build
 ## clean: Remove build artifacts
 clean:
 	@echo "Cleaning..."
-	@rm -rf $(BUILD_DIR)
+	@rm -rf $(BUILD_DIR) $(DIST_DIR)
 	rm -f coverage.out coverage.html
 	go clean -testcache
 	@echo "Clean complete"
