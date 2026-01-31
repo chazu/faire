@@ -4,6 +4,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -21,6 +22,8 @@ type EditOptions struct {
 	WorkflowID string
 	OutputPath string
 	NoCommit   bool
+	NoTUI      bool // For LLM automation
+	InputFile  string // For --no-tui mode
 }
 
 // NewEditCommand creates the edit command for creating/editing workflows.
@@ -51,12 +54,22 @@ Examples:
 	cmd.Flags().StringVar(&opts.ConfigPath, "config", "", "config file path")
 	cmd.Flags().StringVar(&opts.WorkflowID, "workflow", "", "workflow ID to edit (creates new if empty)")
 	cmd.Flags().StringVar(&opts.OutputPath, "output", "", "output path for workflow.yaml")
+	cmd.Flags().StringVar(&opts.InputFile, "file", "", "input YAML file (for --no-tui mode)")
 	cmd.Flags().BoolVar(&opts.NoCommit, "no-commit", false, "skip git commit after saving")
 
 	return cmd
 }
 
 func runEdit(opts *EditOptions) error {
+	// Check for --no-tui mode
+	if IsNoTUI() || opts.NoTUI {
+		return runEditNonInteractive(opts)
+	}
+	return runEditInteractive(opts)
+}
+
+// runEditInteractive runs the TUI editor.
+func runEditInteractive(opts *EditOptions) error {
 	ctx := context.Background()
 
 	// Load config
@@ -177,6 +190,83 @@ func saveWorkflowToPath(wf *workflows.Workflow, path string) error {
 
 	if err := os.WriteFile(path, data, 0644); err != nil {
 		return fmt.Errorf("failed to write workflow: %w", err)
+	}
+
+	return nil
+}
+
+// runEditNonInteractive runs edit in non-TUI mode for LLM automation.
+func runEditNonInteractive(opts *EditOptions) error {
+	ctx := context.Background()
+
+	// Load config
+	cfg, err := config.LoadWithDefaults()
+	if err != nil {
+		return fmt.Errorf("failed to load config: %w", err)
+	}
+
+	// Open repo
+	repo := gitrepo.New(cfg.Repo.Path)
+	if !repo.IsInitialized(ctx) {
+		return fmt.Errorf("repository not initialized. Run 'svf init' first")
+	}
+
+	// Create store
+	str, err := store.New(repo, cfg)
+	if err != nil {
+		return fmt.Errorf("failed to create store: %w", err)
+	}
+
+	// Load workflow from file or stdin
+	var wf *workflows.Workflow
+	if opts.InputFile != "" {
+		// Load from file
+		data, err := os.ReadFile(opts.InputFile)
+		if err != nil {
+			return fmt.Errorf("failed to read input file: %w", err)
+		}
+		wf, err = workflows.UnmarshalWorkflow(data)
+		if err != nil {
+			return fmt.Errorf("failed to parse workflow: %w", err)
+		}
+	} else {
+		// Read from stdin
+		data, err := io.ReadAll(os.Stdin)
+		if err != nil {
+			return fmt.Errorf("failed to read stdin: %w", err)
+		}
+		if len(data) == 0 {
+			return fmt.Errorf("no input provided (use --file or pipe via stdin)")
+		}
+		wf, err = workflows.UnmarshalWorkflow(data)
+		if err != nil {
+			return fmt.Errorf("failed to parse workflow: %w", err)
+		}
+	}
+
+	// Validate workflow
+	if err := wf.Validate(); err != nil {
+		return fmt.Errorf("workflow validation failed: %w", err)
+	}
+
+	// Save workflow
+	saveOpts := store.SaveOptions{
+		Commit: !opts.NoCommit,
+	}
+
+	if opts.OutputPath != "" {
+		// Save to specific path
+		if err := saveWorkflowToPath(wf, opts.OutputPath); err != nil {
+			return fmt.Errorf("failed to save workflow: %w", err)
+		}
+		fmt.Printf("Workflow saved to: %s\n", opts.OutputPath)
+	} else {
+		// Save using store
+		ref, err := str.Save(ctx, wf, saveOpts)
+		if err != nil {
+			return fmt.Errorf("failed to save workflow: %w", err)
+		}
+		fmt.Printf("Workflow saved: %s (id: %s)\n", ref.Slug, ref.ID)
 	}
 
 	return nil
