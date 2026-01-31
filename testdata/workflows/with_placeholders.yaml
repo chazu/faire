@@ -1,0 +1,35 @@
+schema_version: 1
+id: wf_01HZY3J9Y3G6Q9T3
+title: Workflow with Placeholders
+description: Demonstrates placeholder usage in workflows
+tags: [example, placeholders]
+
+defaults:
+  shell: bash
+  cwd: .
+  confirm_each_step: true
+
+placeholders:
+  service:
+    prompt: "Service name"
+    default: "foo-service"
+    validate: "^[a-z0-9-]+$"
+  namespace:
+    prompt: "Kubernetes namespace"
+    default: "default"
+  api_key:
+    prompt: "API Key"
+    secret: true
+
+steps:
+  - name: Check current pods
+    command: "kubectl -n <namespace> get pods -l app=<service>"
+
+  - name: Restart deployment
+    command: "kubectl -n <namespace> rollout restart deploy/<service>"
+
+  - name: Watch rollout
+    command: "kubectl -n <namespace> rollout status deploy/<service>"
+
+  - name: API call with secret
+    command: "curl -H 'Authorization: Bearer <api_key>' https://api.example.com"

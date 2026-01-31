@@ -1,0 +1,5 @@
+schema_version: 1
+title: Minimal Workflow
+steps:
+  - name: Run command
+    command: echo "Hello, World!"

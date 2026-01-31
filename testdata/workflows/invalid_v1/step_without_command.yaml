@@ -1,0 +1,5 @@
+schema_version: 1
+title: Invalid Step Workflow
+steps:
+  - name: Step without command
+    # Missing command - should fail validation

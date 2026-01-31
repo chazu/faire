@@ -1,0 +1,3 @@
+schema_version: 1
+title: Empty Workflow
+# No steps - should fail validation
