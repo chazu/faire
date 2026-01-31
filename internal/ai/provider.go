@@ -4,6 +4,7 @@ package ai
 import (
 	"context"
 	"fmt"
+	"regexp"
 
 	"github.com/chazuruo/svf/internal/workflows"
 )
@@ -184,8 +185,42 @@ func (e *ExplainError) Unwrap() error {
 }
 
 // Redact redacts sensitive information from prompts.
+// This provides automatic redaction using the same detection patterns as the TUI.
 func Redact(s string) string {
-	// TODO: Implement redaction of API keys, passwords, etc.
-	// For now, return as-is
-	return s
+	// Import redaction patterns from TUI package
+	// For now, we'll use a simple implementation that can be enhanced
+	if s == "" {
+		return s
+	}
+
+	// Use the detectSensitiveItems function from the TUI package
+	// Since we're in a different package, we'll re-implement the patterns here
+	patterns := []string{
+		// API Keys
+		`(?i)(api[_-]?key|apikey|key)[\"']?\s*[:=]\s*[\"']?[a-zA-Z0-9_\-]{20,}[\"']?`,
+		`(?i)sk-[a-zA-Z0-9]{20,}`,
+		`(?i)pk-[a-zA-Z0-9]{20,}`,
+		`(?i)AKIA[0-9A-Z]{16}`,
+		// Passwords
+		`(?i)(password|passwd|pass)[\"']?\s*[:=]\s*[\"']?[^\s\"']+[\"']?`,
+		// Tokens
+		`(?i)(token|access[_-]?token|refresh[_-]?token)[\"']?\s*[:=]\s*[\"']?[a-zA-Z0-9_\-\.~=]{20,}[\"']?`,
+		`(?i)gh[pousr]_[a-zA-Z0-9]{36,}`,
+		// Bearer tokens
+		`(?i)bearer\s+[a-zA-Z0-9_\-\.~=]+`,
+		// Secrets
+		`(?i)(secret|secret[_-]?key|secret[_-]?id)[\"']?\s*[:=]\s*[\"']?[a-zA-Z0-9_\-]{16,}[\"']?`,
+		// Email
+		`[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}`,
+		// Private keys
+		`-----BEGIN\s+(RSA\s+)?PRIVATE\s+KEY-----`,
+	}
+
+	result := s
+	for _, p := range patterns {
+		re := regexp.MustCompile(p)
+		result = re.ReplaceAllString(result, "<REDACTED>")
+	}
+
+	return result
 }

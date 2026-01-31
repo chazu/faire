@@ -4,6 +4,7 @@ package tui
 import (
 	"fmt"
 	"io"
+	"regexp"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -38,12 +39,20 @@ type RedactionModel struct {
 	// Canceled indicates if user canceled.
 	Canceled bool
 
+	// Edit mode fields
+	editing      bool
+	editInput    textinput.Model
+	editIndex    int
+	editOriginal string
+
 	// styles
-	normalStyle    lipgloss.Style
-	selectedStyle  lipgloss.Style
-	redactedStyle  lipgloss.Style
-	warningStyle   lipgloss.Style
-	headerStyle    lipgloss.Style
+	normalStyle   lipgloss.Style
+	selectedStyle lipgloss.Style
+	redactedStyle lipgloss.Style
+	warningStyle  lipgloss.Style
+	headerStyle   lipgloss.Style
+	labelStyle    lipgloss.Style
+	infoStyle     lipgloss.Style
 
 	// width and height
 	width  int
@@ -58,6 +67,8 @@ const (
 	RedactionStateReviewing RedactionState = iota
 	// RedactionStateRedacting means user is redacting items.
 	RedactionStateRedacting
+	// RedactionStateEditing means user is editing a specific item.
+	RedactionStateEditing
 	// RedactionStateConfirming means user is confirming to send.
 	RedactionStateConfirming
 	// RedactionStateFinished means redaction is complete.
@@ -68,7 +79,132 @@ const (
 type RedactedItem struct {
 	Original string
 	Redacted string
-	Type     string // "api-key", "password", "token", "email", etc.
+	Type     SensitiveType
+	StartPos int
+	EndPos   int
+}
+
+// SensitiveType represents the type of sensitive data.
+type SensitiveType string
+
+const (
+	TypeAPIKey     SensitiveType = "api-key"
+	TypePassword   SensitiveType = "password"
+	TypeToken      SensitiveType = "token"
+	TypeBearer     SensitiveType = "bearer"
+	TypeEmail      SensitiveType = "email"
+	TypeSecret     SensitiveType = "secret"
+	TypeCredential SensitiveType = "credential"
+	TypePrivateKey SensitiveType = "private-key"
+	TypeAuthHeader SensitiveType = "auth-header"
+	TypeCookie     SensitiveType = "cookie"
+	TypeSession    SensitiveType = "session"
+	TypeUnknown    SensitiveType = "unknown"
+)
+
+// Pattern defines a regex pattern for detecting sensitive data.
+type Pattern struct {
+	Type    SensitiveType
+	Regex   *regexp.Regexp
+	Example string
+}
+
+// getDetectionPatterns returns all regex patterns for detecting sensitive data.
+func getDetectionPatterns() []Pattern {
+	return []Pattern{
+		// API Keys - common patterns
+		{
+			Type:    TypeAPIKey,
+			Regex:   regexp.MustCompile(`(?i)(api[_-]?key|apikey|key)[\"']?\s*[:=]\s*[\"']?([a-zA-Z0-9_\-]{20,})[\"']?`),
+			Example: `"api_key": "sk-1234567890abcdef..."`,
+		},
+		{
+			Type:    TypeAPIKey,
+			Regex:   regexp.MustCompile(`(?i)(sk-[a-zA-Z0-9]{20,}|pk-[a-zA-Z0-9]{20,})`),
+			Example: `sk-1234567890abcdef...`,
+		},
+		{
+			Type:    TypeAPIKey,
+			Regex:   regexp.MustCompile(`(?i)(AKIA[0-9A-Z]{16})`),
+			Example: `AKIAIOSFODNN7EXAMPLE`,
+		},
+
+		// Passwords
+		{
+			Type:    TypePassword,
+			Regex:   regexp.MustCompile(`(?i)(password|passwd|pass)[\"']?\s*[:=]\s*[\"']?([^\s\"']+)[\"']?`),
+			Example: `"password": "secret123"`,
+		},
+		{
+			Type:    TypePassword,
+			Regex:   regexp.MustCompile(`(?i)(--password|-p)\s+(\S+)`),
+			Example: `mysql -u user -p secret123`,
+		},
+
+		// Bearer tokens and authorization headers
+		{
+			Type:    TypeBearer,
+			Regex:   regexp.MustCompile(`(?i)(authorization|auth)[\"']?\s*:\s*[\"']?(bearer\s+)([a-zA-Z0-9_\-\.~=]+)`),
+			Example: `"Authorization": "Bearer eyJhbGciOi..."`,
+		},
+		{
+			Type:    TypeAuthHeader,
+			Regex:   regexp.MustCompile(`(?i)(authorization|auth)[\"']?\s*:\s*[\"']?([a-zA-Z0-9_\-\.~=]+)`),
+			Example: `"Authorization": "Basic dXNlcjpwYXNz"`,
+		},
+
+		// Tokens
+		{
+			Type:    TypeToken,
+			Regex:   regexp.MustCompile(`(?i)(token|access[_-]?token|refresh[_-]?token)[\"']?\s*[:=]\s*[\"']?([a-zA-Z0-9_\-\.~=]{20,})[\"']?`),
+			Example: `"access_token": "eyJhbGciOi..."`,
+		},
+		{
+			Type:    TypeToken,
+			Regex:   regexp.MustCompile(`(?i)(github[_-]?token|git[_-]?token|gh[_-]?token)[\"']?\s*[:=]\s*[\"']?(gh[pousr]_[a-zA-Z0-9]{36,})`),
+			Example: `"github_token": "ghp_1234567890abcdef..."`,
+		},
+
+		// Secrets
+		{
+			Type:    TypeSecret,
+			Regex:   regexp.MustCompile(`(?i)(secret|secret[_-]?key|secret[_-]?id)[\"']?\s*[:=]\s*[\"']?([a-zA-Z0-9_\-]{16,})[\"']?`),
+			Example: `"secret_key": "abcd1234efgh5678"`,
+		},
+
+		// Private keys (PEM format detection)
+		{
+			Type:    TypePrivateKey,
+			Regex:   regexp.MustCompile(`-----BEGIN\s+(RSA\s+)?PRIVATE\s+KEY-----`),
+			Example: `-----BEGIN PRIVATE KEY-----`,
+		},
+
+		// Cookies and session IDs
+		{
+			Type:    TypeCookie,
+			Regex:   regexp.MustCompile(`(?i)(cookie)[\"']?\s*:\s*[\"']?([a-zA-Z0-9_\-\.=]+)`),
+			Example: `"Cookie": "sessionid=abc123..."`,
+		},
+		{
+			Type:    TypeSession,
+			Regex:   regexp.MustCompile(`(?i)(session[_-]?id|session[_-]?token|sid)[\"']?\s*[:=]\s*[\"']?([a-zA-Z0-9_\-]{20,})[\"']?`),
+			Example: `"session_id": "abc123def456..."`,
+		},
+
+		// Email addresses
+		{
+			Type:    TypeEmail,
+			Regex:   regexp.MustCompile(`[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}`),
+			Example: `user@example.com`,
+		},
+
+		// Generic credential pattern
+		{
+			Type:    TypeCredential,
+			Regex:   regexp.MustCompile(`(?i)(credential|creds|auth[_-]?token)[\"']?\s*[:=]\s*[\"']?([a-zA-Z0-9_\-]{16,})[\"']?`),
+			Example: `"creds": "abcd1234efgh5678"`,
+		},
+	}
 }
 
 // NewRedactionModel creates a new redaction model.
@@ -83,7 +219,9 @@ func NewRedactionModel(content string) RedactionModel {
 			index:    i,
 			original: item.Original,
 			redacted: item.Original,
-		 itemType: item.Type,
+			itemType: item.Type,
+			startPos: item.StartPos,
+			endPos:   item.EndPos,
 		}
 	}
 
@@ -104,6 +242,10 @@ func NewRedactionModel(content string) RedactionModel {
 	ti.Placeholder = "Type 'confirm' to send data to AI"
 	ti.Focus()
 
+	// Create edit input
+	ei := textinput.New()
+	ei.Placeholder = "Enter replacement value (or leave blank for <REDACTED>)"
+
 	// Styles
 	normalStyle := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("251"))
@@ -119,19 +261,28 @@ func NewRedactionModel(content string) RedactionModel {
 	headerStyle := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("86")).
 		Bold(true)
+	labelStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("242")).
+		Width(15)
+	infoStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("245"))
 
 	return RedactionModel{
 		Content:         content,
 		RedactedContent: content,
-		State:          RedactionStateReviewing,
-		List:           l,
-		Textarea:       ta,
-		ConfirmInput:   ti,
-		normalStyle:    normalStyle,
-		selectedStyle:  selectedStyle,
-		redactedStyle:  redactedStyle,
-		warningStyle:   warningStyle,
-		headerStyle:    headerStyle,
+		State:           RedactionStateReviewing,
+		List:            l,
+		Textarea:        ta,
+		ConfirmInput:    ti,
+		editInput:       ei,
+		editing:         false,
+		normalStyle:     normalStyle,
+		selectedStyle:   selectedStyle,
+		redactedStyle:   redactedStyle,
+		warningStyle:    warningStyle,
+		headerStyle:     headerStyle,
+		labelStyle:      labelStyle,
+		infoStyle:       infoStyle,
 	}
 }
 
@@ -146,60 +297,10 @@ func (m RedactionModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
-		// nolint:staticcheck // QF1003 - tagged switch refactor would be complex, current pattern is clear
-		switch msg.String() {
-		case "ctrl+c", "q":
-			m.Canceled = true
-			m.State = RedactionStateFinished
-			return m, tea.Quit
-
-		case "enter":
-			if m.State == RedactionStateReviewing {
-				// Move to redaction state
-				m.State = RedactionStateRedacting
-			} else if m.State == RedactionStateConfirming {
-				// Check confirmation
-				if strings.ToLower(m.ConfirmInput.Value()) == "confirm" {
-					m.Confirmed = true
-					m.State = RedactionStateFinished
-					return m, tea.Quit
-				}
-			}
-
-		case "r":
-			if m.State == RedactionStateReviewing {
-				// Redact selected item
-				if len(m.List.Items()) > 0 {
-					item := m.List.SelectedItem().(redactionItem)
-					item.redacted = "<REDACTED>"
-					m.List.SetItem(m.List.Index(), item)
-					m.updateRedactedContent()
-				}
-			}
-
-		case "e":
-			if m.State == RedactionStateReviewing {
-				// Edit selected item manually
-				if len(m.List.Items()) > 0 {
-					// For now, just mark for manual edit
-					// TODO: Implement proper edit UI
-					_ = m.State // Placeholder for future implementation
-				}
-			}
-
-		case "c":
-			if m.State == RedactionStateRedacting {
-				// Move to confirmation state
-				m.State = RedactionStateConfirming
-				m.ConfirmInput.Focus()
-			}
-
-		case "esc":
-			if m.State == RedactionStateRedacting {
-				// Go back to reviewing
-				m.State = RedactionStateReviewing
-			}
+		if m.editing {
+			return m.handleEditingKey(msg)
 		}
+		return m.handleNormalKey(msg)
 	}
 
 	// Update child components based on state
@@ -228,10 +329,138 @@ func (m RedactionModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, tea.Batch(cmds...)
 }
 
+// handleNormalKey handles key messages in normal (non-editing) mode.
+func (m RedactionModel) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "ctrl+c", "q":
+		m.Canceled = true
+		m.State = RedactionStateFinished
+		return m, tea.Quit
+
+	case "enter":
+		if m.State == RedactionStateReviewing {
+			// Move to redaction state
+			m.State = RedactionStateRedacting
+		} else if m.State == RedactionStateConfirming {
+			// Check confirmation
+			if strings.ToLower(m.ConfirmInput.Value()) == "confirm" {
+				m.Confirmed = true
+				m.State = RedactionStateFinished
+				return m, tea.Quit
+			}
+		}
+
+	case "r":
+		if m.State == RedactionStateReviewing || m.State == RedactionStateRedacting {
+			// Redact selected item
+			if len(m.List.Items()) > 0 {
+				item := m.List.SelectedItem().(redactionItem)
+				item.redacted = "<REDACTED>"
+				m.List.SetItem(m.List.Index(), item)
+				m.updateRedactedContent()
+				m.State = RedactionStateRedacting
+			}
+		}
+
+	case "e":
+		if m.State == RedactionStateReviewing || m.State == RedactionStateRedacting {
+			// Edit selected item manually
+			if len(m.List.Items()) > 0 {
+				item := m.List.SelectedItem().(redactionItem)
+				m.editing = true
+				m.editIndex = m.List.Index()
+				m.editOriginal = item.original
+				m.editInput.Reset()
+				m.editInput.Placeholder = fmt.Sprintf("Replace '%s' with (blank = <REDACTED>)", truncateString(item.original, 30))
+				m.editInput.Focus()
+			}
+		}
+
+	case "c":
+		if m.State == RedactionStateReviewing || m.State == RedactionStateRedacting {
+			// Move to confirmation state
+			m.State = RedactionStateConfirming
+			m.ConfirmInput.Reset()
+			m.ConfirmInput.Focus()
+		}
+
+	case "esc":
+		if m.State == RedactionStateRedacting {
+			// Go back to reviewing
+			m.State = RedactionStateReviewing
+		} else if m.State == RedactionStateConfirming {
+			// Go back to redacting
+			m.State = RedactionStateRedacting
+		}
+
+	case "a":
+		if m.State == RedactionStateReviewing {
+			// Redact all detected items
+			for i := 0; i < len(m.List.Items()); i++ {
+				item := m.List.Items()[i].(redactionItem)
+				item.redacted = "<REDACTED>"
+				m.List.SetItem(i, item)
+			}
+			m.updateRedactedContent()
+			m.State = RedactionStateRedacting
+		}
+
+	case "u":
+		if m.State == RedactionStateRedacting {
+			// Undo all redactions
+			for i := 0; i < len(m.List.Items()); i++ {
+				item := m.List.Items()[i].(redactionItem)
+				item.redacted = item.original
+				m.List.SetItem(i, item)
+			}
+			m.updateRedactedContent()
+			m.State = RedactionStateReviewing
+		}
+	}
+
+	return m, nil
+}
+
+// handleEditingKey handles key messages in edit mode.
+func (m RedactionModel) handleEditingKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.Type {
+	case tea.KeyCtrlC, tea.KeyEsc:
+		// Cancel editing
+		m.editing = false
+		m.editInput.Reset()
+		return m, nil
+
+	case tea.KeyEnter:
+		// Apply edit
+		replacement := m.editInput.Value()
+		if replacement == "" {
+			replacement = "<REDACTED>"
+		}
+		item := m.List.Items()[m.editIndex].(redactionItem)
+		item.redacted = replacement
+		m.List.SetItem(m.editIndex, item)
+		m.updateRedactedContent()
+
+		m.editing = false
+		m.editInput.Reset()
+		m.State = RedactionStateRedacting
+		return m, nil
+	}
+
+	// Update edit input
+	var cmd tea.Cmd
+	m.editInput, cmd = m.editInput.Update(msg)
+	return m, cmd
+}
+
 // View implements tea.Model.
 func (m RedactionModel) View() string {
 	if m.State == RedactionStateFinished {
 		return m.finishedView()
+	}
+
+	if m.editing {
+		return m.editView()
 	}
 
 	// Layout based on state
@@ -255,9 +484,11 @@ func (m RedactionModel) reviewView() string {
 	// Instructions
 	if m.State == RedactionStateReviewing {
 		b.WriteString("Review detected sensitive data:\n\n")
-		b.WriteString("  [r] Redact selected  [e] Edit  [c] Continue to confirmation  [q] Quit\n\n")
+		b.WriteString("  [a] Redact all  [r] Redact selected  [e] Edit selected  [c] Confirm\n")
+		b.WriteString("  [↑/↓] Navigate  [q] Quit\n\n")
 	} else {
 		b.WriteString("Redaction complete. Review changes:\n\n")
+		b.WriteString("  [a] Redact all  [r] Redact selected  [e] Edit selected  [u] Undo all\n")
 		b.WriteString("  [c] Confirm to send  [esc] Go back  [q] Quit\n\n")
 	}
 
@@ -271,6 +502,45 @@ func (m RedactionModel) reviewView() string {
 	layout := lipgloss.JoinHorizontal(lipgloss.Top, leftPanel, rightPanel)
 
 	b.WriteString(layout)
+
+	return b.String()
+}
+
+// editView shows the edit dialog for a single item.
+func (m RedactionModel) editView() string {
+	var b strings.Builder
+
+	b.WriteString(m.headerStyle.Render("✏️  Edit Redaction"))
+	b.WriteString("\n\n")
+
+	// Show original value
+	item := m.List.Items()[m.editIndex].(redactionItem)
+
+	b.WriteString(m.labelStyle.Render("Type:"))
+	b.WriteString(" ")
+	b.WriteString(m.infoStyle.Render(string(item.itemType)))
+	b.WriteString("\n\n")
+
+	b.WriteString(m.labelStyle.Render("Original:"))
+	b.WriteString(" ")
+	b.WriteString(m.redactedStyle.Render(truncateString(item.original, 60)))
+	b.WriteString("\n\n")
+
+	b.WriteString(m.labelStyle.Render("Replace with:"))
+	b.WriteString("\n")
+	b.WriteString(m.editInput.View())
+	b.WriteString("\n\n")
+
+	// Footer
+	footerStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("241")).
+		MarginTop(1)
+
+	footer := footerStyle.Render(
+		" [Enter]: apply replacement (blank = <REDACTED>)  [Esc]: cancel",
+	)
+
+	b.WriteString(footer)
 
 	return b.String()
 }
@@ -289,10 +559,12 @@ func (m RedactionModel) confirmView() string {
 	b.WriteString(fmt.Sprintf("  Original length: %d characters\n", len(m.Content)))
 	b.WriteString(fmt.Sprintf("  Redacted length: %d characters\n", len(m.RedactedContent)))
 
-	if m.RedactedContent != m.Content {
-		b.WriteString("  Status: Some data has been redacted\n")
+	redactedCount := m.countRedactedItems()
+	if redactedCount > 0 {
+		b.WriteString(fmt.Sprintf("  Items redacted: %d\n", redactedCount))
+		b.WriteString(m.infoStyle.Render("  ✓ Some data has been redacted\n"))
 	} else {
-		b.WriteString("  Status: No changes made (data will be sent as-is)\n")
+		b.WriteString(m.warningStyle.Render("  ⚠ No changes made (data will be sent as-is)\n"))
 	}
 
 	b.WriteString("\n")
@@ -344,7 +616,7 @@ func (m RedactionModel) itemListView() string {
 		b.WriteString(m.List.View())
 	}
 
-	width := 40
+	width := 50
 	return lipgloss.NewStyle().
 		Width(width).
 		Height(m.height - 10).
@@ -368,7 +640,7 @@ func (m RedactionModel) contentPreviewView() string {
 
 	b.WriteString(content)
 
-	width := m.width - 50
+	width := m.width - 60
 	if width < 40 {
 		width = 40
 	}
@@ -395,6 +667,18 @@ func (m *RedactionModel) updateRedactedContent() {
 	m.Textarea.SetValue(content)
 }
 
+// countRedactedItems returns the number of items that have been redacted.
+func (m RedactionModel) countRedactedItems() int {
+	count := 0
+	for _, item := range m.List.Items() {
+		ri := item.(redactionItem)
+		if ri.redacted != ri.original {
+			count++
+		}
+	}
+	return count
+}
+
 // GetRedactedContent returns the redacted content.
 func (m *RedactionModel) GetRedactedContent() string {
 	return m.RedactedContent
@@ -410,12 +694,22 @@ func (m *RedactionModel) DidCancel() bool {
 	return m.Canceled
 }
 
+// truncateString truncates a string to a maximum length.
+func truncateString(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen-3] + "..."
+}
+
 // redactionItem is a list item for a detected sensitive item.
 type redactionItem struct {
 	index    int
 	original string
 	redacted string
-	itemType string
+	itemType SensitiveType
+	startPos int
+	endPos   int
 }
 
 func (r redactionItem) FilterValue() string {
@@ -427,7 +721,7 @@ func (r redactionItem) Title() string {
 	if r.redacted == "<REDACTED>" {
 		return fmt.Sprintf("[%s] <REDACTED>", r.itemType)
 	}
-	return fmt.Sprintf("[%s] %s", r.itemType, r.original)
+	return fmt.Sprintf("[%s] %s", r.itemType, truncateString(r.original, 30))
 }
 
 // Description implements list.Item.
@@ -438,8 +732,8 @@ func (r redactionItem) Description() string {
 // redactionDelegate defines how items are rendered in the list.
 type redactionDelegate struct{}
 
-func (d redactionDelegate) Height() int { return 1 }
-func (d redactionDelegate) Spacing() int  { return 0 }
+func (d redactionDelegate) Height() int { return 2 }
+func (d redactionDelegate) Spacing() int { return 0 }
 func (d redactionDelegate) Update(msg tea.Msg, m *list.Model) tea.Cmd {
 	return nil
 }
@@ -466,37 +760,62 @@ func (d redactionDelegate) Render(w io.Writer, m list.Model, index int, listItem
 	}
 
 	_, _ = fmt.Fprint(w, text)
+
+	// Second line: status
+	if r.redacted == "<REDACTED>" {
+		statusText := lipgloss.NewStyle().Foreground(lipgloss.Color("226")).Render("  [REDACTED]")
+		_, _ = fmt.Fprintf(w, "\n%s", statusText)
+	} else if r.redacted != r.original {
+		statusText := lipgloss.NewStyle().Foreground(lipgloss.Color("86")).Render(fmt.Sprintf("  → %s", truncateString(r.redacted, 40)))
+		_, _ = fmt.Fprintf(w, "\n%s", statusText)
+	} else {
+		_, _ = fmt.Fprintf(w, "\n")
+	}
 }
 
-// detectSensitiveItems detects potential sensitive items in content.
+// detectSensitiveItems detects potential sensitive items in content using regex patterns.
 func detectSensitiveItems(content string) []RedactedItem {
 	var items []RedactedItem
+	seen := make(map[string]bool) // Track unique values to avoid duplicates
 
-	// Simple detection patterns
-	// TODO: Add more sophisticated detection
+	patterns := getDetectionPatterns()
 
-	// Look for API keys (common patterns)
-	if strings.Contains(content, "api_key") || strings.Contains(content, "apiKey") {
-		// Extract key values
-		// This is a simplified detection
-		_ = items // TODO: implement extraction
+	for _, pattern := range patterns {
+		matches := pattern.Regex.FindAllStringSubmatch(content, -1)
+		for _, match := range matches {
+			// Extract the sensitive value (usually the last capturing group or specific group)
+			var sensitiveValue string
+			if len(match) > 2 {
+				// For patterns with capturing groups, use the last group
+				sensitiveValue = match[len(match)-1]
+			} else if len(match) > 1 {
+				sensitiveValue = match[1]
+			} else {
+				sensitiveValue = match[0]
+			}
+
+			// Skip empty values or already seen values
+			if sensitiveValue == "" || seen[sensitiveValue] {
+				continue
+			}
+
+			// Find position in content
+			startPos := strings.Index(content, match[0])
+			if startPos == -1 {
+				continue
+			}
+
+			seen[sensitiveValue] = true
+
+			items = append(items, RedactedItem{
+				Original: sensitiveValue,
+				Redacted: sensitiveValue,
+				Type:     pattern.Type,
+				StartPos: startPos,
+				EndPos:   startPos + len(sensitiveValue),
+			})
+		}
 	}
-
-	// Look for passwords
-	if strings.Contains(content, "password") || strings.Contains(content, "PASS") {
-		// Extract password values
-		_ = items // TODO: implement extraction
-	}
-
-	// Look for tokens
-	if strings.Contains(content, "token") || strings.Contains(content, "TOKEN") {
-		// Extract token values
-		_ = items // TODO: implement extraction
-	}
-
-	// Look for emails
-	// Simple email pattern
-	// TODO: Use proper regex
 
 	return items
 }
