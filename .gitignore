@@ -37,3 +37,6 @@ __debug_bin*
 # Go workspace
 go.work
 go.work.sum
+
+# bv (beads viewer) local config and caches
+.bv/
