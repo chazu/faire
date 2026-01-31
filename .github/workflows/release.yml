@@ -1,0 +1,144 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  test:
+    name: Run tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          cache: true
+
+      - name: Run tests
+        run: go test -v -race -cover ./...
+
+  build:
+    name: Build release binaries
+    needs: test
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - goos: darwin
+            goarch: amd64
+          - goos: darwin
+            goarch: arm64
+          - goos: linux
+            goarch: amd64
+          - goos: linux
+            goarch: arm64
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          cache: true
+
+      - name: Get version
+        id: version
+        run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+
+      - name: Build binary
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: 0
+          VERSION: ${{ steps.version.outputs.VERSION }}
+          COMMIT: ${{ github.sha }}
+          BUILD_DATE: ${{ github.event.head_commit.timestamp }}
+        run: |
+          mkdir -p dist
+          go build -ldflags "-X main.Version=${VERSION} -X main.Commit=${COMMIT} -X main.Date=${BUILD_DATE}" \
+            -o dist/faire-${VERSION}-${GOOS}-${GOARCH} ./cmd/gitsavgy
+
+      - name: Generate checksum
+        run: |
+          cd dist
+          shasum -a 256 faire-${VERSION}-${{ matrix.goos }}-${{ matrix.goarch }} >> faire-${VERSION}-sha256.txt
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: faire-${{ steps.version.outputs.VERSION }}-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: dist/faire-${{ steps.version.outputs.VERSION }}-${{ matrix.goos }}-${{ matrix.goarch }}
+
+  release:
+    name: Create GitHub release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Get version
+        id: version
+        run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - name: Prepare checksums
+        run: |
+          cat dist/faire-*/faire-*.txt | sort -k2 > dist/faire-${{ steps.version.outputs.VERSION }}-sha256.txt
+
+      - name: Generate release notes
+        id: release_notes
+        run: |
+          NOTES=$(git log --pretty=format:"- %s" $(git describe --tags --abbrev=0 HEAD^)..HEAD | head -20)
+          echo "NOTES<<EOF" >> $GITHUB_OUTPUT
+          echo "$NOTES" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.VERSION }}
+          name: Release ${{ steps.version.outputs.VERSION }}
+          body: |
+            ## faire ${{ steps.version.outputs.VERSION }}
+
+            ${{ steps.release_notes.outputs.NOTES }}
+
+            ### Installation
+
+            Download the binary for your platform and make it executable:
+
+            ```bash
+            # macOS or Linux
+            chmod +x faire-<version>-<os>-<arch>
+            mv faire-<version>-<os>-<arch> /usr/local/bin/faire
+            ```
+
+            ### Checksums
+
+            Verify your download with SHA256:
+
+            ```bash
+            shasum -a 256 -c faire-${{ steps.version.outputs.VERSION }}-sha256.txt
+            ```
+          files: |
+            dist/faire-*/faire-*
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
