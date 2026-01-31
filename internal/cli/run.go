@@ -4,12 +4,16 @@ package cli
 import (
 	"context"
 	"fmt"
-	"os"
+	"path/filepath"
+	"strings"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
 	"github.com/chazuruo/svf/internal/config"
 	"github.com/chazuruo/svf/internal/gitrepo"
+	"github.com/chazuruo/svf/internal/placeholders"
 	"github.com/chazuruo/svf/internal/runner"
+	"github.com/chazuruo/svf/internal/tui"
 	"github.com/chazuruo/svf/internal/workflows"
 	"github.com/chazuruo/svf/internal/workflows/store"
 )
@@ -149,17 +153,32 @@ func runNonInteractive(ctx context.Context, wf *workflows.Workflow, opts *RunOpt
 		fmt.Println("Using local checkout (--local mode)")
 	}
 
-	// Extract placeholders from all steps
-	allParams := make(map[string]string)
-	for _, step := range wf.Steps {
-		// TODO: Use placeholders package to extract
-		// For now, skip extraction
-		_ = step
-	}
+	// Extract placeholders from workflow using placeholders package
+	phInfo := placeholders.ExtractWithMetadata(wf)
 
-	// Merge with provided params
+	// Start with provided params
+	allParams := make(map[string]string)
 	for k, v := range opts.Params {
 		allParams[k] = v
+	}
+
+	// In non-interactive mode, if we have placeholders without values, fail
+	if len(phInfo) > 0 {
+		missing := []string{}
+		for name := range phInfo {
+			if _, ok := allParams[name]; !ok {
+				// Check if there's a default value
+				if phInfo[name].Default != "" {
+					allParams[name] = phInfo[name].Default
+				} else {
+					missing = append(missing, name)
+				}
+			}
+		}
+		if len(missing) > 0 {
+			return fmt.Errorf("missing placeholder values (use --param to provide): %s\nExample: --param %s=value",
+				fmt.Sprintf("<%s>", strings.Join(missing, ", <")), missing[0])
+		}
 	}
 
 	// Create runner with dangerous command checking
@@ -170,33 +189,78 @@ func runNonInteractive(ctx context.Context, wf *workflows.Workflow, opts *RunOpt
 	var failedStep int
 
 	for i, step := range wf.Steps {
-		// Substitute placeholders
-		// TODO: Use placeholders.Substitute
-		cmd := step.Command
+		// Substitute placeholders using placeholders package
+		cmd, err := placeholders.Substitute(step.Command, allParams)
+		if err != nil {
+			// Substitution failed - check if we have any placeholders at all
+			phNames := placeholders.CollectFromSteps(wf.Steps)
+			if len(phNames) == 0 {
+				// No placeholders in workflow, use original command
+				cmd = step.Command
+			} else {
+				// We have placeholders but substitution failed
+				return fmt.Errorf("step %d: %w", i, err)
+			}
+		}
+
+		// Resolve working directory
+		cwd := step.CWD
+		if cwd == "" && wf.Defaults.CWD != "" {
+			cwd = wf.Defaults.CWD
+		}
+		if !filepath.IsAbs(cwd) && cfg.Repo.Path != "" {
+			cwd = filepath.Join(cfg.Repo.Path, cwd)
+		}
 
 		// Show command
 		fmt.Printf("Step %d/%d: %s\n", i+1, len(wf.Steps), step.Name)
 		if opts.DryRun {
 			fmt.Printf("  Would execute: %s\n", cmd)
+			if cwd != "" {
+				fmt.Printf("  Working directory: %s\n", cwd)
+			}
+			if step.Shell != "" {
+				fmt.Printf("  Shell: %s\n", step.Shell)
+			}
 			continue
 		}
 
-		// Check for dangerous command
-		danger := dangerChecker.Check(cmd)
-		if danger != nil && opts.Yes {
-			// Auto-confirm mode, show warning but proceed
-			fmt.Fprintf(os.Stderr, "  Warning: %s\n", danger.Risk)
+		// Execute step using runner.Exec
+		execConfig := runner.ExecConfig{
+			Command:       cmd,
+			Shell:         step.Shell,
+			CWD:           cwd,
+			Env:           step.Env,
+			Stream:        cfg.Runner.StreamOutput,
+			DangerChecker: dangerChecker,
+			AutoConfirm:   opts.Yes,
 		}
 
-		// Execute step
-		// TODO: Actually execute using runner.Exec
-		fmt.Printf("  Executing: %s...\n", cmd)
+		result := runner.Exec(context.Background(), execConfig)
 
-		// Simulate execution for now
-		if !opts.Yes {
-			// In non-yes mode, we'd prompt here
-			// For now, just continue
-			_ = opts.Yes // Placeholder for future implementation
+		// Show output if streaming was not enabled
+		if !cfg.Runner.StreamOutput && result.Output != "" {
+			fmt.Print(result.Output)
+		}
+
+		// Check for cancellation
+		if result.ExitCode == 13 {
+			fmt.Println("\nWorkflow canceled")
+			return fmt.Errorf("workflow canceled (exit code 13)")
+		}
+
+		// Check for failure
+		if !result.Success {
+			if !step.ContinueOnError {
+				success = false
+				failedStep = i
+				fmt.Printf("\n✗ Step failed with exit code %d\n", result.ExitCode)
+				if result.Error != nil {
+					fmt.Printf("  Error: %v\n", result.Error)
+				}
+				break
+			}
+			fmt.Printf("\n⚠ Step failed (exit code %d) but continuing...\n", result.ExitCode)
 		}
 	}
 
@@ -210,10 +274,40 @@ func runNonInteractive(ctx context.Context, wf *workflows.Workflow, opts *RunOpt
 
 // runInteractive executes a workflow with TUI.
 func runInteractive(ctx context.Context, wf *workflows.Workflow, opts *RunOptions, cfg *config.Config) error {
-	// TODO: Integrate with TUI runner model from internal/tui/runner.go
-	// For now, fall back to non-interactive with confirmation
-	fmt.Printf("Running workflow: %s\n", wf.Title)
-	fmt.Println("(Interactive mode - TODO: integrate TUI runner)")
-	fmt.Println("Falling back to non-interactive mode with prompts...")
-	return runNonInteractive(ctx, wf, opts, cfg)
+	// Collect parameters from options
+	params := make(map[string]string)
+	for k, v := range opts.Params {
+		params[k] = v
+	}
+
+	// Create execution plan
+	plan := runner.Plan{
+		Workflow:   wf,
+		Parameters: params,
+		RepoRoot:   cfg.Repo.Path,
+	}
+
+	// Create danger checker
+	dangerChecker := runner.NewDangerChecker(cfg.Runner.DangerousCommandWarnings)
+
+	// Create TUI runner model
+	model := tui.NewRunnerModel(plan, dangerChecker, false, cfg.Runner.StreamOutput)
+
+	// Run the TUI
+	p := tea.NewProgram(model)
+	finalModel, err := p.Run()
+	if err != nil {
+		return fmt.Errorf("failed to run TUI: %w", err)
+	}
+
+	// Check result
+	result := finalModel.(tui.RunnerModel)
+	if result.DidCancel() {
+		return fmt.Errorf("workflow canceled (exit code 13)")
+	}
+	if !result.DidSucceed() {
+		return fmt.Errorf("workflow failed (exit code 20)")
+	}
+
+	return nil
 }

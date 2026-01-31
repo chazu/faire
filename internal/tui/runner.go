@@ -2,15 +2,17 @@
 package tui
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"strings"
-	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/bubbles/list"
+	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/chazuruo/svf/internal/placeholders"
 	"github.com/chazuruo/svf/internal/runner"
 )
 
@@ -27,6 +29,18 @@ type RunnerModel struct {
 
 	// Placeholders contains resolved placeholder values.
 	Placeholders map[string]string
+
+	// PlaceholderInfo contains metadata about placeholders.
+	PlaceholderInfo map[string]placeholders.PlaceholderInfo
+
+	// CurrentPlaceholder is the placeholder currently being prompted for.
+	CurrentPlaceholder string
+
+	// PlaceholderInput is the text input for placeholder values.
+	PlaceholderInput textinput.Model
+
+	// PlaceholderError is any error from placeholder validation.
+	PlaceholderError string
 
 	// State is the current runner state.
 	State RunnerState
@@ -48,6 +62,15 @@ type RunnerModel struct {
 
 	// Canceled indicates if the user canceled.
 	Canceled bool
+
+	// DangerChecker for dangerous command checking
+	DangerChecker *runner.DangerChecker
+
+	// AutoConfirm dangerous commands
+	AutoConfirm bool
+
+	// StreamOutput controls whether to stream command output
+	StreamOutput bool
 
 	// styles
 	normalStyle    lipgloss.Style
@@ -87,7 +110,10 @@ type RunnerMsg struct {
 type OutputMsg string
 
 // NewRunnerModel creates a new runner model.
-func NewRunnerModel(plan runner.Plan) RunnerModel {
+func NewRunnerModel(plan runner.Plan, dangerChecker *runner.DangerChecker, autoConfirm bool, streamOutput bool) RunnerModel {
+	// Extract placeholder info
+	phInfo := placeholders.ExtractWithMetadata(plan.Workflow)
+
 	// Create step list
 	items := []list.Item{}
 	for i, step := range plan.Workflow.Steps {
@@ -107,6 +133,13 @@ func NewRunnerModel(plan runner.Plan) RunnerModel {
 	// Create viewport
 	vp := viewport.New(80, 20)
 
+	// Determine initial state - start with prompting if we have placeholders
+	initialState := StateReady
+	if len(phInfo) > 0 && len(plan.Parameters) == 0 {
+		// We have placeholders but no values, start in prompting mode
+		initialState = StatePrompting
+	}
+
 	// Styles
 	normalStyle := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("240"))
@@ -123,20 +156,21 @@ func NewRunnerModel(plan runner.Plan) RunnerModel {
 		Foreground(lipgloss.Color("242"))
 
 	return RunnerModel{
-		Plan:          plan,
-		CurrentStep:   0,
-		StepResults:   make([]runner.StepResult, len(plan.Workflow.Steps)),
-		Placeholders:  plan.Parameters,
-		State:         StateReady,
-		List:          l,
-		Viewport:      vp,
-		Finished:      false,
-		normalStyle:   normalStyle,
-		selectedStyle:  selectedStyle,
-		successStyle:  successStyle,
-		errorStyle:    errorStyle,
-		runningStyle:  runningStyle,
-		pendingStyle:  pendingStyle,
+		Plan:            plan,
+		CurrentStep:     0,
+		StepResults:     make([]runner.StepResult, len(plan.Workflow.Steps)),
+		Placeholders:    plan.Parameters,
+		PlaceholderInfo: phInfo,
+		State:           initialState,
+		List:            l,
+		Viewport:        vp,
+		Finished:        false,
+		normalStyle:     normalStyle,
+		selectedStyle:   selectedStyle,
+		successStyle:    successStyle,
+		errorStyle:      errorStyle,
+		runningStyle:    runningStyle,
+		pendingStyle:    pendingStyle,
 	}
 }
 
@@ -148,6 +182,11 @@ func (m RunnerModel) Init() tea.Cmd {
 // Update implements tea.Model.
 func (m RunnerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
+
+	// Handle prompting state separately
+	if m.State == StatePrompting {
+		return m.handlePrompting(msg)
+	}
 
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
@@ -249,11 +288,106 @@ func (m RunnerModel) View() string {
 		return m.finishedView()
 	}
 
+	if m.State == StatePrompting {
+		return m.promptingView()
+	}
+
 	// Layout: left panel (step list), right panel (output + help)
 	leftPanel := m.stepListView()
 	rightPanel := m.outputView()
 
 	return lipgloss.JoinHorizontal(lipgloss.Top, leftPanel, rightPanel)
+}
+
+// promptingView renders the placeholder prompting view.
+func (m RunnerModel) promptingView() string {
+	var b strings.Builder
+
+	// If we don't have a current placeholder set, find one
+	if m.CurrentPlaceholder == "" {
+		for name := range m.PlaceholderInfo {
+			if _, ok := m.Placeholders[name]; !ok {
+				m.CurrentPlaceholder = name
+				m.setupPlaceholderInput()
+				break
+			}
+		}
+	}
+
+	// If still no placeholder, we're done
+	if m.CurrentPlaceholder == "" {
+		m.State = StateReady
+		return m.View()
+	}
+
+	info := m.PlaceholderInfo[m.CurrentPlaceholder]
+
+	// Title
+	titleStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("86")). // Pink
+		Bold(true).
+		MarginBottom(1)
+
+	b.WriteString(titleStyle.Render("Workflow Placeholders\n\n"))
+
+	// Prompt text
+	promptText := info.Prompt
+	if promptText == "" {
+		promptText = fmt.Sprintf("Enter value for <%s>", info.Name)
+	}
+
+	promptStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("251")).
+		MarginBottom(1)
+
+	b.WriteString(promptStyle.Render(promptText + "\n"))
+
+	// Usage info
+	if len(info.UsedIn) > 0 {
+		usageStyle := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("242")).
+			MarginBottom(1)
+
+		b.WriteString(usageStyle.Render("Used in: " + strings.Join(info.UsedIn, ", ") + "\n\n"))
+	}
+
+	// Default value hint
+	if info.Default != "" {
+		hintStyle := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("244")).
+			MarginBottom(1)
+
+		b.WriteString(hintStyle.Render(fmt.Sprintf("Default: %s\n\n", info.Default)))
+	}
+
+	// Error message
+	if m.PlaceholderError != "" {
+		errorStyle := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("203")).
+			MarginBottom(1)
+
+		b.WriteString(errorStyle.Render("Error: " + m.PlaceholderError + "\n\n"))
+	}
+
+	// Input field
+	b.WriteString(m.PlaceholderInput.View())
+
+	// Help footer
+	footerStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("241")).
+		MarginTop(2)
+
+	remaining := len(m.PlaceholderInfo) - len(m.Placeholders)
+	b.WriteString(footerStyle.Render(
+		fmt.Sprintf("\n\n[Enter] Submit (%d remaining) [Ctrl+C] Cancel", remaining),
+	))
+
+	return lipgloss.NewStyle().
+		Width(80).
+		Padding(1, 2).
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("240")).
+		Render(b.String())
 }
 
 // stepListView renders the step list.
@@ -347,6 +481,95 @@ func (m RunnerModel) helpText() string {
 	)
 }
 
+// handlePrompting handles key messages when prompting for placeholders.
+func (m RunnerModel) handlePrompting(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		switch msg.String() {
+		case "ctrl+c", "q":
+			m.Canceled = true
+			m.Finished = true
+			m.State = StateFinished
+			return m, tea.Quit
+
+		case "enter":
+			// Submit current placeholder value
+			value := m.PlaceholderInput.Value()
+
+			// Use default if empty
+			if value == "" && m.PlaceholderInfo[m.CurrentPlaceholder].Default != "" {
+				value = m.PlaceholderInfo[m.CurrentPlaceholder].Default
+			}
+
+			// Validate if pattern is provided
+			if m.PlaceholderInfo[m.CurrentPlaceholder].Validate != "" {
+				if err := placeholders.Validate(value, m.PlaceholderInfo[m.CurrentPlaceholder].Validate); err != nil {
+					m.PlaceholderError = err.Error()
+					return m, nil
+				}
+			}
+
+			// Store the value
+			if m.Placeholders == nil {
+				m.Placeholders = make(map[string]string)
+			}
+			m.Placeholders[m.CurrentPlaceholder] = value
+
+			// Clear error and find next placeholder
+			m.PlaceholderError = ""
+			m.CurrentPlaceholder = ""
+
+			// Find next placeholder without a value
+			for name := range m.PlaceholderInfo {
+				if _, ok := m.Placeholders[name]; !ok {
+					m.CurrentPlaceholder = name
+					break
+				}
+			}
+
+			// If no more placeholders, move to ready state
+			if m.CurrentPlaceholder == "" {
+				m.State = StateReady
+				return m, nil
+			}
+
+			// Setup input for next placeholder
+			m.setupPlaceholderInput()
+			return m, nil
+		}
+
+	// Update text input
+	var cmd tea.Cmd
+	m.PlaceholderInput, cmd = m.PlaceholderInput.Update(msg)
+	return m, cmd
+	}
+
+	return m, nil
+}
+
+// setupPlaceholderInput sets up the text input for the current placeholder.
+func (m *RunnerModel) setupPlaceholderInput() {
+	info := m.PlaceholderInfo[m.CurrentPlaceholder]
+
+	// Create input
+	ti := textinput.New()
+	ti.Placeholder = "Enter value"
+
+	// Set default value in the input
+	if info.Default != "" {
+		ti.SetValue(info.Default)
+		ti.Placeholder = fmt.Sprintf("Default: %s", info.Default)
+	}
+
+	// Set prompt text
+	if info.Prompt != "" {
+		ti.Placeholder = info.Prompt
+	}
+
+	ti.Focus()
+	m.PlaceholderInput = ti
+}
+
 // finishedView renders the finished state.
 func (m RunnerModel) finishedView() string {
 	var b strings.Builder
@@ -387,14 +610,53 @@ func (m RunnerModel) runStep(stepIndex int) tea.Cmd {
 		// Mark state as running
 		m.State = StateRunning
 
-		// Execute step (for now, simulate)
-		// TODO: Integrate with actual runner
+		// Get the step
+		step := m.Plan.Workflow.Steps[stepIndex]
+
+		// Substitute placeholders
+		cmd, err := runner.Substitute(step.Command, m.Placeholders)
+		if err != nil && len(m.Placeholders) > 0 {
+			// Substitution failed, use original
+			cmd = step.Command
+		}
+		if cmd == "" && len(m.Placeholders) == 0 {
+			// No substitution performed, use original
+			cmd = step.Command
+		}
+
+		// Resolve working directory
+		cwd := step.CWD
+		if cwd == "" && m.Plan.Workflow.Defaults.CWD != "" {
+			cwd = m.Plan.Workflow.Defaults.CWD
+		}
+
+		// Get shell
+		shell := step.Shell
+		if shell == "" {
+			shell = "bash"
+		}
+
+		// Execute step using runner.Exec
+		execConfig := runner.ExecConfig{
+			Command:       cmd,
+			Shell:         shell,
+			CWD:           cwd,
+			Env:           step.Env,
+			Stream:        m.StreamOutput,
+			DangerChecker: m.DangerChecker,
+			AutoConfirm:   m.AutoConfirm,
+		}
+
+		execResult := runner.Exec(context.Background(), execConfig)
+
+		// Convert to StepResult
 		result := runner.StepResult{
 			Step:     stepIndex,
-			Success:  true,
-			ExitCode: 0,
-			Output:   fmt.Sprintf("Step %d output here...\n", stepIndex),
-			Duration: time.Millisecond * 100,
+			Success:  execResult.Success,
+			ExitCode: execResult.ExitCode,
+			Output:   execResult.Output,
+			Duration: execResult.Duration,
+			Error:    execResult.Error,
 		}
 
 		return RunnerMsg{Result: result}

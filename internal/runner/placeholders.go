@@ -1,67 +1,32 @@
 // Package runner provides placeholder parsing and substitution.
+//
+// Deprecated: This package is deprecated. Use github.com/chazuruo/svf/internal/placeholders
+// instead. This file is kept for backwards compatibility only.
 package runner
 
 import (
-	"fmt"
-	"regexp"
-	"strings"
-)
-
-var (
-	// placeholderRegex matches <parameter> tokens.
-	placeholderRegex = regexp.MustCompile(`<([a-zA-Z_][a-zA-Z0-9_-]*)>`)
+	"github.com/chazuruo/svf/internal/placeholders"
 )
 
 // ExtractPlaceholders extracts all unique placeholders from a string.
+//
+// Deprecated: Use placeholders.Extract instead.
 func ExtractPlaceholders(s string) []string {
-	matches := placeholderRegex.FindAllStringSubmatch(s, -1)
-	seen := make(map[string]bool)
-	var result []string
-
-	for _, m := range matches {
-		if len(m) > 1 {
-			name := m[1]
-			if !seen[name] {
-				seen[name] = true
-				result = append(result, name)
-			}
-		}
-	}
-
-	return result
+	return placeholders.Extract(s)
 }
 
 // Substitute replaces placeholders with values.
+//
+// Deprecated: Use placeholders.Substitute instead.
 func Substitute(s string, values map[string]string) (string, error) {
-	result := s
-	var missing []string
-
-	// Find all placeholders
-	matches := placeholderRegex.FindAllStringSubmatch(s, -1)
-	for _, m := range matches {
-		if len(m) > 1 {
-			name := m[1]
-			placeholder := m[0]
-			value, ok := values[name]
-			if !ok {
-				missing = append(missing, name)
-				continue
-			}
-			result = strings.ReplaceAll(result, placeholder, value)
-		}
-	}
-
-	if len(missing) > 0 {
-		return "", fmt.Errorf("missing placeholders: %s", strings.Join(missing, ", "))
-	}
-
-	return result, nil
+	return placeholders.Substitute(s, values)
 }
 
 // ExtractFromWorkflow extracts all placeholders from a workflow.
-// This is a placeholder that will be implemented when needed.
+//
+// Deprecated: Use placeholders.ExtractWithMetadata or placeholders.CollectFromSteps instead.
 func ExtractFromWorkflow(workflow interface{}) map[string]string {
-	// TODO: Implement extraction from workflow
-	// For now, return empty map
+	// This function is deprecated and should not be used.
+	// Use placeholders.ExtractWithMetadata or placeholders.CollectFromSteps instead.
 	return make(map[string]string)
 }
