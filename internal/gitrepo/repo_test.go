@@ -3,9 +3,23 @@ package gitrepo
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 )
+
+// setupGitConfig configures git user.name and user.email for testing.
+func setupGitConfig(tmpDir string) {
+	ctx := context.Background()
+	// Set git config for the test repository
+	cmd := exec.CommandContext(ctx, "git", "config", "user.email", "test@example.com")
+	cmd.Dir = tmpDir
+	_ = cmd.Run()
+
+	cmd = exec.CommandContext(ctx, "git", "config", "user.name", "Test User")
+	cmd.Dir = tmpDir
+	_ = cmd.Run()
+}
 
 func TestNew(t *testing.T) {
 	path := "/test/path"
@@ -70,6 +84,7 @@ func TestGitRepo_Status(t *testing.T) {
 	ctx := context.Background()
 
 	_ = repo.Init(ctx, InitOptions{})
+	setupGitConfig(tmpDir)
 
 	// Create and commit a file so HEAD exists
 	testFile := filepath.Join(tmpDir, "initial.txt")
@@ -99,6 +114,7 @@ func TestGitRepo_GetCurrentBranch(t *testing.T) {
 	ctx := context.Background()
 
 	_ = repo.Init(ctx, InitOptions{})
+	setupGitConfig(tmpDir)
 
 	// Create and commit a file so HEAD exists
 	testFile := filepath.Join(tmpDir, "initial.txt")
@@ -127,6 +143,7 @@ func TestGitRepo_Add_Commit(t *testing.T) {
 	ctx := context.Background()
 
 	_ = repo.Init(ctx, InitOptions{})
+	setupGitConfig(tmpDir)
 
 	// Create initial commit first
 	testFile := filepath.Join(tmpDir, "initial.txt")
@@ -170,6 +187,7 @@ func TestGitRepo_AddAll(t *testing.T) {
 	ctx := context.Background()
 
 	_ = repo.Init(ctx, InitOptions{})
+	setupGitConfig(tmpDir)
 
 	// Create initial commit first
 	testFile := filepath.Join(tmpDir, "initial.txt")
@@ -221,6 +239,7 @@ func TestGitRepo_Status_Entries(t *testing.T) {
 	ctx := context.Background()
 
 	_ = repo.Init(ctx, InitOptions{})
+	setupGitConfig(tmpDir)
 
 	// Create initial commit
 	testFile := filepath.Join(tmpDir, "initial.txt")
@@ -265,6 +284,7 @@ func TestGitRepo_Status_AheadBehind(t *testing.T) {
 	ctx := context.Background()
 
 	_ = repo.Init(ctx, InitOptions{})
+	setupGitConfig(tmpDir)
 
 	// Create initial commit
 	testFile := filepath.Join(tmpDir, "initial.txt")
