@@ -290,9 +290,9 @@ func runRecordHistory(opts *RecordHistoryOptions) error {
 
 	if opts.Since != "" {
 		// Parse duration (e.g., "1h", "1d")
-		duration, err := time.ParseDuration(opts.Since)
-		if err != nil {
-			return fmt.Errorf("failed to parse duration %q: %w", opts.Since, err)
+		duration, parseErr := time.ParseDuration(opts.Since)
+		if parseErr != nil {
+			return fmt.Errorf("failed to parse duration %q: %w", opts.Since, parseErr)
 		}
 		commands, err = parser.ParseSince(duration)
 	} else {

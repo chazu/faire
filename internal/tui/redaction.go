@@ -379,10 +379,11 @@ func (m RedactionModel) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 
 	case "enter":
-		if m.State == RedactionStateReviewing {
+		switch m.State { //nolint:exhaustive // Only handle specific states
+		case RedactionStateReviewing:
 			// Move to redaction state
 			m.State = RedactionStateRedacting
-		} else if m.State == RedactionStateConfirming {
+		case RedactionStateConfirming:
 			// Check confirmation
 			if strings.ToLower(m.ConfirmInput.Value()) == "confirm" {
 				m.Confirmed = true
@@ -445,10 +446,11 @@ func (m RedactionModel) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 
 	case "esc":
-		if m.State == RedactionStateRedacting {
+		switch m.State { //nolint:exhaustive // Only handle specific states
+		case RedactionStateRedacting:
 			// Go back to reviewing
 			m.State = RedactionStateReviewing
-		} else if m.State == RedactionStateConfirming {
+		case RedactionStateConfirming:
 			// Go back to redacting
 			m.State = RedactionStateRedacting
 		}

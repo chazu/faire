@@ -175,6 +175,7 @@ func saveWorkflowToRepo(ctx context.Context, repo gitrepo.Repo, wf *workflows.Wo
 	if opts.Identity != "" {
 		// The store will use the config identity path, but we could
 		// extend this to support custom identity paths per workflow
+		_ = opts.Identity // Reserved for future use
 	}
 
 	// Save the workflow

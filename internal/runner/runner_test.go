@@ -459,7 +459,7 @@ func TestExecWithDangerousCommand(t *testing.T) {
 		// and just verify the danger is detected
 		danger := checker.Check("rm -rf /")
 		if danger == nil {
-			t.Error("expected command to be detected as dangerous")
+			t.Fatal("expected command to be detected as dangerous")
 		}
 		if danger.Name != "Recursive delete" {
 			t.Errorf("expected danger name 'Recursive delete', got %s", danger.Name)

@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"strings"
 
+	//nolint:staticcheck,depguard // SA1019 - openpgp is deprecated but needed for GPG verification
+	// Consider migrating to a maintained alternative like github.com/ProtonMail/go-crypto
 	"golang.org/x/crypto/openpgp"
 )
 

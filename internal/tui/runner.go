@@ -17,14 +17,15 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/chazuruo/svf/internal/config"
 	"github.com/chazuruo/svf/internal/placeholders"
-	"github.com/chazuruo/svf/internal/runner"
+	//nolint:staticcheck // SA1019 - Using runner for Exec, DangerChecker, Plan types (deprecated but needed)
+	runnerpkg "github.com/chazuruo/svf/internal/runner"
 	"github.com/chazuruo/svf/internal/workflows"
 )
 
 // RunnerModel is a Bubble Tea model for running workflows interactively.
 type RunnerModel struct {
 	// Plan is the execution plan.
-	Plan runner.Plan
+	Plan runnerpkg.Plan
 
 	// Config is the application config
 	Config *config.Config
@@ -33,7 +34,7 @@ type RunnerModel struct {
 	CurrentStep int
 
 	// StepResults contains results for executed steps.
-	StepResults []runner.StepResult
+	StepResults []runnerpkg.StepResult
 
 	// Placeholders contains resolved placeholder values.
 	Placeholders map[string]string
@@ -83,7 +84,7 @@ type RunnerModel struct {
 	Canceled bool
 
 	// DangerChecker for dangerous command checking
-	DangerChecker *runner.DangerChecker
+	DangerChecker *runnerpkg.DangerChecker
 
 	// AutoConfirm dangerous commands
 	AutoConfirm bool
@@ -140,7 +141,7 @@ const (
 
 // RunnerMsg is sent when a step finishes.
 type RunnerMsg struct {
-	Result runner.StepResult
+	Result runnerpkg.StepResult
 }
 
 // OutputMsg is sent when there's new output.
@@ -185,17 +186,17 @@ func newRunnerKeyMap() runnerKeyMap {
 }
 
 // NewRunnerModel creates a new runner model.
-func NewRunnerModel(plan runner.Plan, dangerChecker *runner.DangerChecker, autoConfirm bool, streamOutput bool) RunnerModel {
+func NewRunnerModel(plan runnerpkg.Plan, dangerChecker *runnerpkg.DangerChecker, autoConfirm bool, streamOutput bool) RunnerModel {
 	return newRunnerModelWithContext(plan, dangerChecker, autoConfirm, streamOutput, nil)
 }
 
 // NewRunnerModelWithConfig creates a new runner model with full config support.
-func NewRunnerModelWithConfig(plan runner.Plan, cfg *config.Config) RunnerModel {
-	dangerChecker := runner.NewDangerChecker(cfg.Runner.DangerousCommandWarnings)
+func NewRunnerModelWithConfig(plan runnerpkg.Plan, cfg *config.Config) RunnerModel {
+	dangerChecker := runnerpkg.NewDangerChecker(cfg.Runner.DangerousCommandWarnings)
 	return newRunnerModelWithContext(plan, dangerChecker, false, cfg.Runner.StreamOutput, cfg)
 }
 
-func newRunnerModelWithContext(plan runner.Plan, dangerChecker *runner.DangerChecker, autoConfirm bool, streamOutput bool, cfg *config.Config) RunnerModel {
+func newRunnerModelWithContext(plan runnerpkg.Plan, dangerChecker *runnerpkg.DangerChecker, autoConfirm bool, streamOutput bool, cfg *config.Config) RunnerModel {
 	// Extract placeholder info
 	phInfo := placeholders.ExtractWithMetadata(plan.Workflow)
 
@@ -253,7 +254,7 @@ func newRunnerModelWithContext(plan runner.Plan, dangerChecker *runner.DangerChe
 		Plan:            plan,
 		Config:          cfg,
 		CurrentStep:     0,
-		StepResults:     make([]runner.StepResult, len(plan.Workflow.Steps)),
+		StepResults:     make([]runnerpkg.StepResult, len(plan.Workflow.Steps)),
 		Placeholders:    plan.Parameters,
 		PlaceholderInfo: phInfo,
 		State:           initialState,
@@ -343,7 +344,7 @@ func (m RunnerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.State == StateReady || m.State == StateStepResult {
 				// Mark as skipped
 				if m.CurrentStep < len(m.StepResults) {
-					m.StepResults[m.CurrentStep] = runner.StepResult{
+					m.StepResults[m.CurrentStep] = runnerpkg.StepResult{
 						Step:    m.CurrentStep,
 						Success: true, // Treat skip as success
 						Output:   "(skipped)",
@@ -834,21 +835,6 @@ func (m RunnerModel) outputView() string {
 		Render(b.String())
 }
 
-// helpText returns the help text.
-func (m RunnerModel) helpText() string {
-	var parts []string
-
-	if m.State == StateStepResult {
-		parts = append(parts, "[Enter] Next step", "[r] Rerun", "[s] Skip", "[q] Quit")
-	} else {
-		parts = append(parts, "[Enter] Run step", "[s] Skip", "[q] Quit")
-	}
-
-	return lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render(
-		strings.Join(parts, " • "),
-	)
-}
-
 // handlePrompting handles key messages when prompting for placeholders.
 func (m RunnerModel) handlePrompting(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
@@ -1009,7 +995,7 @@ func (m RunnerModel) runStep(stepIndex int) tea.Cmd {
 				cmd = step.Command
 			} else {
 				// We have placeholders but substitution failed
-				result := runner.StepResult{
+				result := runnerpkg.StepResult{
 					Step:     stepIndex,
 					Success:  false,
 					ExitCode: 21,
@@ -1041,7 +1027,7 @@ func (m RunnerModel) runStep(stepIndex int) tea.Cmd {
 		}
 
 		// Execute step using runner.Exec
-		execConfig := runner.ExecConfig{
+		execConfig := runnerpkg.ExecConfig{
 			Command:       cmd,
 			Shell:         shell,
 			CWD:           cwd,
@@ -1051,10 +1037,10 @@ func (m RunnerModel) runStep(stepIndex int) tea.Cmd {
 			AutoConfirm:   m.AutoConfirm,
 		}
 
-		execResult := runner.Exec(context.Background(), execConfig)
+		execResult := runnerpkg.Exec(context.Background(), execConfig)
 
 		// Convert to StepResult
-		result := runner.StepResult{
+		result := runnerpkg.StepResult{
 			Step:     stepIndex,
 			Success:  execResult.Success,
 			ExitCode: execResult.ExitCode,

@@ -412,6 +412,7 @@ func TestGitRepo_Fetch(t *testing.T) {
 	if result.Fetched == 0 {
 		// This is OK if git doesn't report it in verbose mode
 		// The fetch still succeeded
+		t.Logf("Fetch reported 0 refs fetched (this is OK)")
 	}
 }
 

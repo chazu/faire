@@ -310,9 +310,10 @@ func ValidateAtLoadTime(wf *workflows.Workflow) error {
 		if wf.Placeholders == nil {
 			continue
 		}
-		if _, defined := wf.Placeholders[name]; !defined {
+		if _, exists := wf.Placeholders[name]; !exists {
 			// Placeholder is used but not defined - this is OK, just a warning
 			// We'll prompt for it at runtime
+			_ = exists // Explicitly ignore as we only check for existence
 			continue
 		}
 	}

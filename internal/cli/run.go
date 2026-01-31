@@ -12,7 +12,8 @@ import (
 	"github.com/chazuruo/svf/internal/config"
 	"github.com/chazuruo/svf/internal/gitrepo"
 	"github.com/chazuruo/svf/internal/placeholders"
-	"github.com/chazuruo/svf/internal/runner"
+	//nolint:staticcheck // SA1019 - Using runner for Exec, DangerChecker, Plan types (deprecated but needed)
+	runnerpkg "github.com/chazuruo/svf/internal/runner"
 	"github.com/chazuruo/svf/internal/tui"
 	"github.com/chazuruo/svf/internal/workflows"
 	"github.com/chazuruo/svf/internal/workflows/store"
@@ -182,7 +183,7 @@ func runNonInteractive(ctx context.Context, wf *workflows.Workflow, opts *RunOpt
 	}
 
 	// Create runner with dangerous command checking
-	dangerChecker := runner.NewDangerChecker(cfg.Runner.DangerousCommandWarnings)
+	dangerChecker := runnerpkg.NewDangerChecker(cfg.Runner.DangerousCommandWarnings)
 
 	// Execute each step
 	success := true
@@ -226,7 +227,7 @@ func runNonInteractive(ctx context.Context, wf *workflows.Workflow, opts *RunOpt
 		}
 
 		// Execute step using runner.Exec
-		execConfig := runner.ExecConfig{
+		execConfig := runnerpkg.ExecConfig{
 			Command:       cmd,
 			Shell:         step.Shell,
 			CWD:           cwd,
@@ -236,7 +237,7 @@ func runNonInteractive(ctx context.Context, wf *workflows.Workflow, opts *RunOpt
 			AutoConfirm:   opts.Yes,
 		}
 
-		result := runner.Exec(context.Background(), execConfig)
+		result := runnerpkg.Exec(context.Background(), execConfig)
 
 		// Show output if streaming was not enabled
 		if !cfg.Runner.StreamOutput && result.Output != "" {
@@ -308,7 +309,7 @@ func runInteractive(ctx context.Context, wf *workflows.Workflow, opts *RunOption
 	filteredWf.Steps = steps[startIdx:endIdx]
 
 	// Create execution plan
-	plan := runner.Plan{
+	plan := runnerpkg.Plan{
 		Workflow:   &filteredWf,
 		Parameters: params,
 		RepoRoot:   cfg.Repo.Path,
