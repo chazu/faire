@@ -3,7 +3,7 @@ package store
 import (
 	"context"
 
-	"github.com/chazuruo/faire/internal/workflows"
+	"github.com/chazuruo/svf/internal/workflows"
 )
 
 // Store defines the interface for workflow persistence operations.

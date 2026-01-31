@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/chazuruo/faire/internal/config"
+	"github.com/chazuruo/svf/internal/config"
 )
 
 // WhoamiOutput contains the information displayed by the whoami command.

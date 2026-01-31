@@ -2449,3 +2449,708 @@ Integration tests:
 4. **Session replay**: Save full session with timing for demo workflows
 5. **Environment capture**: Capture env var changes between steps
 
+---
+
+## K) Design Decisions Based on Savvy CLI Research
+
+The following open questions were researched by analyzing Savvy CLI's implementation and behavior. This section documents the decisions made for the Git-backed implementation.
+
+### Summary of Decisions
+
+| Question | Decision | Rationale |
+|----------|----------|-----------|
+| Placeholder validation timing | Validate at workflow load time | Savvy validates at runtime, not creation |
+| Workflow ID generation | Optional ULIDs in YAML metadata | File paths are primary; ULIDs provide rename safety |
+| Index update strategy | Rebuild on sync and manual `--reindex` | Savvy uses single binary file; we use rebuildable JSON |
+| Concurrent editing | Rely on Git merge conflict resolution | Savvy has cloud-only editing; Git's model is sufficient |
+| Secret placeholder masking | Skip for MVP - manual redaction only | Savvy has no automatic secret masking |
+| Shell history parsing delimiter | Use `\x1F` (unit separator) | Savvy reads native formats; `|` conflicts with commands |
+| Capture file format | `\x1F` delimiter for safety | Avoids conflicts with literal pipes in commands |
+| Run state persistence | Skip for MVP | Savvy doesn't have it; interactive model doesn't require it |
+| AI redaction levels | Skip for MVP - manual redaction only | Savvy has no automatic redaction levels |
+| PR mode branch naming | Auto-generate from template, prompt if exists | Savvy has no PR integration |
+| Export templates | Support custom template files | Improvement over Savvy's hard-coded approach |
+| `run --local` behavior | Use Git checkout, error if not found | Same as Savvy's local cache approach |
+| Step `cwd` resolution | Support per-step, relative to repo root | Savvy doesn't support this; improvement |
+| `continue_on_error` | Skip for MVP interactive mode | Savvy has no automatic error handling |
+| Drafts directory | Gitignored, local-only | Savvy has no drafts concept |
+| Shared/ permissions | Convention only, optional CODEOWNERS | Savvy uses cloud permissions |
+
+---
+
+### K.1 Placeholder Validation Timing
+
+**Decision**: Validate placeholder syntax at workflow load time, not during creation.
+
+**Savvy's approach:**
+- Validation occurs at runtime when the runbook loads
+- Uses regex `<([a-zA-Z0-9-_]+)>` to extract placeholders
+- No validation at creation time - placeholders are manually inserted via TUI
+
+**Implementation:**
+```go
+// internal/placeholders/extract.go
+var placeholderRegex = regexp.MustCompile(`<([a-zA-Z0-9-_]+)>`)
+
+func Extract(input string) []string {
+    matches := placeholderRegex.FindAllStringSubmatch(input, -1)
+    seen := make(map[string]bool)
+    var result []string
+    for _, m := range matches {
+        if !seen[m[1]] {
+            seen[m[1]] = true
+            result = append(result, m[1])
+        }
+    }
+    return result
+}
+```
+
+**UX implications:**
+- Users can freely insert placeholders during workflow editing
+- Syntax errors are caught when workflow is loaded for running
+- Error message: "Invalid placeholder '<invalid-name>' in step 'X'"
+
+---
+
+### K.2 Workflow ID Generation
+
+**Decision**: ULIDs are **optional** in the schema. File paths are the primary reference.
+
+**Savvy's approach:**
+- Server-assigned stable IDs with `rb-` prefix
+- IDs are immutable and assigned once by cloud backend
+- Step IDs use local generator with prefixes (`cmd-`, `f-`, `llm-`)
+
+**Schema:**
+```yaml
+schema_version: 1
+id: wf_01HZY3J9Y3G6Q9T3   # OPTIONAL - provides rename safety
+title: Restart service safely
+```
+
+**When to use ULIDs:**
+- Generated on workflow creation if not present
+- Preserved when workflow is renamed (file path changes)
+- Used as fallback identifier if file path lookup fails
+
+**File path as primary ID:**
+- `workflows/platform/chaz/restart-service/workflow.yaml`
+- Slugified from title for new workflows
+- Can be renamed by moving the directory
+
+---
+
+### K.3 Index Update Strategy
+
+**Decision**: Rebuild `.gitsavvy/index.json` on `sync` and manual `--reindex`. Index is gitignored.
+
+**Savvy's approach:**
+- Single gob-encoded binary file at `~/.config/savvy/savvy.local`
+- In-memory map, no separate index
+- Search loads entire map into memory
+
+**Index location:** `.gitsavvy/index.json` (gitignored)
+
+**When to rebuild:**
+```go
+// internal/index/builder.go
+func (b *Builder) NeedsRebuild(ctx context.Context) bool {
+    // Rebuild if:
+    // 1. Index doesn't exist
+    // 2. Explicitly requested (--reindex flag)
+    // 3. After successful sync
+    // 4. Index is stale (older than any workflow file)
+}
+```
+
+**Index format:**
+```json
+{
+  "version": 1,
+  "updated_at": "2026-01-31T12:00:00Z",
+  "workflows": [
+    {
+      "id": "wf_01HZY3J9Y3G6Q9T3",
+      "title": "Restart service safely",
+      "path": "workflows/platform/chaz/restart-service",
+      "tags": ["prod", "kubernetes"],
+      "updated_at": "2026-01-31T12:00:00Z"
+    }
+  ]
+}
+```
+
+**Conflict handling:** Last sync wins (index is rebuildable from source files)
+
+**Gitignore entry:**
+```
+# Local search index (auto-generated)
+.gitsavvy/index.json
+```
+
+---
+
+### K.4 Concurrent Workflow Editing
+
+**Decision**: Rely on standard Git merge conflict resolution. No additional locking.
+
+**Savvy's approach:**
+- No concurrent editing - cloud-only editing via dashboard
+- No PUT/PATCH endpoints - only POST to create new runbooks
+- Server-side conflict resolution (proprietary)
+
+**Git-native approach:**
+- File-per-workflow design enables Git's diff/merge
+- Users resolve conflicts via their preferred merge tool
+- No special "semantic merge" needed - YAML is human-readable
+
+**Example conflict scenario:**
+```
+<<<<<<< HEAD
+steps:
+  - name: Check pods
+    command: kubectl get pods
+  - name: Restart
+    command: kubectl rollout restart
+=======
+steps:
+  - name: Verify pods
+    command: kubectl get pods -w
+  - name: Rolling restart
+    command: kubectl rollout restart
+>>>>>>> feature/their-changes
+```
+
+User resolves in their editor or via `git mergetool`.
+
+---
+
+### K.5 Secret Placeholder Masking
+
+**Decision**: Skip "secret" type for MVP. All placeholders treated uniformly.
+
+**Savvy's approach:**
+- No automatic secret masking
+- Manual redaction via TUI only
+- All placeholders treated uniformly (no "secret" type)
+- Users manually replace sensitive values with `<placeholders>`
+
+**MVP schema:**
+```yaml
+placeholders:
+  api_token:
+    prompt: "API token"
+    # No "secret" field - all treated the same
+```
+
+**Future enhancement** (if requested):
+```yaml
+placeholders:
+  api_token:
+    prompt: "API token"
+    secret: true  # Mask in TUI output, omit from logs
+```
+
+**Security note:** The safest approach is to never persist secrets - prompt for them each run.
+
+---
+
+### K.6 Shell History Parsing & Capture File Format
+
+**Decision**: Use `\x1F` (unit separator) instead of `|` for capture file delimiter.
+
+**Savvy's approach:**
+- Bash: Reads `~/.bash_history` with timestamp format (`#1616420000`)
+- Zsh: Reads `~/.zsh_history` with format (`: timestamp;command`)
+- Fish: YAML-like format with `- cmd:` prefix
+- Multi-line: Zsh reconstructs via escaped backslashes
+
+**Problem with pipe delimiter:**
+```
+1738301245|/Users/chaz/projects/svc|cat file.txt | grep pattern
+```
+The literal `|` in the command breaks parsing.
+
+**Solution: Use ASCII unit separator (`\x1F`)**
+```
+1738301245\x1F/Users/chaz/projects/svx1Fcat file.txt | grep pattern
+```
+
+**Capture file format:**
+```
+<timestamp>\x1F<cwd>\x1F<command>
+<timestamp>\x1F<cwd>\x1F<command with | pipes & and special chars>
+```
+
+**Multi-line commands:** MVP treats as separate steps. Users can merge in TUI editor.
+
+---
+
+### K.7 Run State Persistence
+
+**Decision**: Skip run state persistence for MVP.
+
+**Savvy's approach:**
+- No run state persistence
+- State is in-memory only during single run session
+- `RunServer` maintains `currIndex` in memory
+- Unix socket communication (`/tmp/savvy-run.sock`)
+- When run exits, all state is lost
+
+**Key insight:** Savvy's model is interactive "wizard" - user controls each step. No automation means no need for complex state persistence.
+
+**MVP approach:**
+- Interactive runs don't need state persistence
+- Sessions are short-lived
+- User is always in control
+
+**Future enhancement** (if there's demand):
+```go
+// internal/runner/state.go
+type RunState struct {
+    RunID       string              `json:"run_id"`
+    WorkflowRef string              `json:"workflow_ref"`
+    StartedAt   time.Time           `json:"started_at"`
+    UpdatedAt   time.Time           `json:"updated_at"`
+    Status      RunStatus           `json:"status"` // running, paused, completed, failed
+    CurrentStep int                 `json:"current_step"`
+    Placeholders map[string]string  `json:"placeholders"`
+    StepResults []StepResult        `json:"step_results"`
+    LogPath     string              `json:"log_path"`
+}
+
+// Stored in: ~/.local/share/gitsavvy/runs/<run-id>.json
+// Cleanup: Delete states older than 30 days
+```
+
+---
+
+### K.8 AI Redaction Levels
+
+**Decision**: Skip redaction levels for MVP. Manual redaction only.
+
+**Savvy's approach:**
+- No automatic redaction levels ("basic", "strict", etc.)
+- Users manually edit commands via `huh` TUI form before sending to AI
+- Description: "Replace sensitive data with `<REDACTED>`. To remove a command, simply delete the text."
+- Happens locally before data leaves the machine
+
+**MVP approach:**
+- Manual redaction TUI is sufficient
+- Follow Savvy's simple model
+
+**Future enhancement** (if requested):
+
+**Redaction levels:**
+- **none**: No automatic redaction
+- **basic**: Redact common patterns (API keys, tokens, emails)
+- **strict**: Basic + file paths, hostnames, project-specific terms
+
+---
+
+### K.9 PR Mode Branch Naming
+
+**Decision**: Auto-generate from template, prompt user if branch exists.
+
+**Savvy's approach:**
+- No PR integration - cloud-first architecture
+- No Git commands, branch management, or PR workflows
+
+**Template format:**
+```toml
+[git]
+feature_branch_template = "gitsavvy/{identity}/{date}/{slug}"
+```
+
+**Generated example:**
+```
+gitsavvy/platform/chaz/2026-01-31/restart-service
+```
+
+**If branch exists:** Prompt user with options
+```
+Branch 'gitsavvy/platform/chaz/2026-01-31/restart-service' already exists.
+
+Options:
+  1) Reuse - Continue working on existing branch
+  2) Create new - Create with timestamp suffix
+  3) Fail - Exit and let you handle manually
+
+Choice [1-3]:
+```
+
+**Workflow after save:**
+1. Create/update workflow file on feature branch
+2. Git commit with message: `"Update workflow: Restart service safely"`
+3. Print instructions for PR creation
+4. If `gh` CLI available, optionally run `gh pr create`
+
+---
+
+### K.10 Export Templates
+
+**Decision**: Support custom template files (improvement over Savvy).
+
+**Savvy's approach:**
+- Hard-coded Markdown template
+- Compiled at init with `template.Must()`
+- Not customizable
+
+**Default template:** Similar to Savvy's with support for frontmatter
+
+**Customization:**
+```bash
+# Check for custom template in order:
+# 1. .gitsavvy/templates/export.md (repo-specific)
+# 2. ~/.config/gitsavvy/templates/export.md (user-specific)
+# 3. Use built-in default
+```
+
+**Template data available:**
+- Workflow metadata: title, description, tags, created_at, updated_at
+- Steps: name, description, command, shell, cwd
+- Placeholders: name, prompt, default, validate
+- Custom frontmatter support
+
+---
+
+### K.11 `run --local` Behavior
+
+**Decision**: Use local Git checkout, error if workflow not found.
+
+**Savvy's approach:**
+- Users run `savvy sync` to download runbooks to local storage
+- Local storage: `~/.config/savvy/savvy.local` (gob-encoded)
+- When `--local` is set, uses `local.RunbookClient` instead of API
+- No fallback - if runbook not in cache, returns `ErrNotFound`
+
+**Implementation:**
+```go
+// internal/cli/run.go
+if cmd.Local {
+    // Skip fetch, use current checkout
+    // No error if offline
+} else {
+    // Fetch latest via git pull
+    if err := git.Fetch(ctx); err != nil {
+        // Check if network error, suggest --local
+        return fmt.Errorf("fetch failed: %w (use --local for offline mode)", err)
+    }
+}
+```
+
+**Error message:**
+```
+Error: workflow 'restart-service' not found.
+Run 'gitsavvy sync' to update your local checkout, or use --local if offline.
+```
+
+---
+
+### K.12 Step `cwd` Resolution
+
+**Decision**: Support per-step `cwd`, relative to repository root.
+
+**Savvy's approach:**
+- No per-step working directories
+- All steps execute in current working directory where `savvy run` was invoked
+
+**Schema:**
+```yaml
+steps:
+  - name: Check pods
+    command: "kubectl get pods"
+    cwd: "ops/k8s"  # Relative to repo root
+```
+
+**Resolution rules:**
+- **Absolute paths:** Allowed but warned (reduces portability)
+- **Relative paths:** Relative to **repository root** (not workflow directory)
+- **Empty/omitted:** Use current working directory of `gitsavvy run` invocation
+
+**Validation:**
+```go
+// internal/workflows/validate.go
+func (s *Step) ValidateCWD(repoRoot string) error {
+    if s.CWD == "" {
+        return nil
+    }
+
+    // Check for path traversal
+    if strings.Contains(s.CWD, "..") {
+        return fmt.Errorf("step '%s': cwd cannot contain '..'", s.Name)
+    }
+
+    // Resolve path
+    fullPath := filepath.Join(repoRoot, s.CWD)
+
+    // Check if exists
+    if _, err := os.Stat(fullPath); os.IsNotExist(err) {
+        return fmt.Errorf("step '%s': cwd '%s' does not exist", s.Name, s.CWD)
+    }
+
+    return nil
+}
+```
+
+**Error message:**
+```
+Error: Step 'Check pods': cwd 'ops/k8s' does not exist.
+```
+
+---
+
+### K.13 `continue_on_error` Behavior
+
+**Decision**: Skip for MVP interactive mode. Follow Savvy's model - user decides interactively.
+
+**Savvy's approach:**
+- No `continue_on_error` feature
+- Interactive execution only - users manually press Enter to execute each step
+- Exit codes tracked but no automatic behavior on failure
+- When a command fails, workflow does NOT automatically proceed
+- User sees the error and decides whether to continue or stop
+
+**MVP interactive mode:**
+```
+Step 2/3: Restart deployment
+Command: kubectl rollout restart deploy/foo
+
+Error: Process exited with status 1
+
+Options:
+  [Enter] Continue to next step
+  [s] Skip this step
+  [r] Retry this step
+  [q] Quit workflow
+
+Your choice:
+```
+
+**Future enhancement** (for `--yes` non-interactive mode):
+```yaml
+steps:
+  - name: Optional step
+    command: "kubectl get pods"
+    continue_on_error: true  # Don't stop on failure
+```
+
+---
+
+### K.14 Drafts Directory
+
+**Decision:** `drafts/` is gitignored (local-only), not committed to Git.
+
+**Savvy's approach:**
+- No drafts concept
+- Workflows are either in the cloud or not
+- The `redact` TUI is effectively the draft editing phase
+
+**Location:** `drafts/<identity>/<workflow-slug>/`
+
+**Behavior:**
+- Drafts are **not committed to Git**
+- Drafts are **not synced** by `gitsavvy sync`
+- `gitsavvy record --draft` saves to `drafts/` instead of `workflows/`
+- `gitsavvy edit` on a draft keeps it in `drafts/`
+- `gitsavvy publish <draft>` moves from `drafts/` to `workflows/<identity>/` and commits
+
+**Gitignore entry:**
+```
+# Git-backed workflow drafts
+drafts/
+```
+
+**Additional commands:**
+```bash
+gitsavvy drafts list           # Show local drafts
+gitsavvy drafts clean          # Remove drafts older than N days
+gitsavvy publish <draft-name>  # Move draft to workflows and commit
+```
+
+---
+
+### K.15 Shared/ Directory Permissions
+
+**Decision:** `shared/` is a convention only, with optional Git-native enforcement.
+
+**Savvy's approach:**
+- No shared workflow concept
+- All runbooks stored in Savvy's cloud backend
+- Permissions managed by proprietary cloud service
+
+**No built-in permissions:**
+- Anyone with repo write access can write to `shared/`
+- Git's permissions model applies (repo-level access control)
+- `shared/` is just a directory like any other
+
+**Optional enforcement via Git:**
+
+**1. CODEOWNERS file:**
+```
+# Shared workflows require team approval
+shared/ @platform-team
+
+# Personal workflows - owner can approve
+workflows/**/ @${owner}
+```
+
+**2. Branch protection rules:**
+- Require PR review for changes to `shared/**`
+- Auto-merge for personal `workflows/<user>/**`
+
+**3. Pre-commit hook** (optional, set up by `gitsavvy init`):
+```bash
+#!/bin/bash
+# .git/hooks/pre-commit
+# Warn if non-team member pushes to shared/
+
+CHANGED_SHARED=$(git diff --cached --name-only | grep "^shared/")
+if [ -n "$CHANGED_SHARED" ]; then
+    TEAM_PREFIX=$(git config gitsavvy.team-prefix)
+    CURRENT_USER=$(git config user.name)
+
+    # Simple check - can be enhanced
+    if ! echo "$CURRENT_USER" | grep -q "$TEAM_PREFIX"; then
+        echo "Warning: You're pushing to shared/ but aren't a member of $TEAM_PREFIX"
+        echo "Continue? (y/n)"
+        read -r response
+        if [ "$response" != "y" ]; then
+            exit 1
+        fi
+    fi
+fi
+```
+
+---
+
+### K.16 Updated Workflow Schema (v1)
+
+Based on all decisions, the final workflow schema:
+
+```yaml
+schema_version: 1
+# Optional stable ID (ULID) - provides rename safety
+id: wf_01HZY3J9Y3G6Q9T3
+
+title: Restart service safely
+description: Restart foo-service and verify health
+tags: [prod, kubernetes, runbook]
+
+created_at: "2026-01-31T12:00:00Z"
+updated_at: "2026-01-31T12:00:00Z"
+
+# Optional defaults for all steps
+defaults:
+  shell: zsh
+  cwd: .
+  confirm_each_step: true
+
+# Placeholder definitions (all treated uniformly - no "secret" type)
+placeholders:
+  service:
+    prompt: "Service name"
+    default: "foo-service"
+    validate: "^[a-z0-9-]+$"
+  namespace:
+    prompt: "Kubernetes namespace"
+    default: "default"
+
+steps:
+  - name: Check current pods
+    description: "List all pods in the namespace"
+    command: "kubectl -n <namespace> get pods -l app=<service>"
+    shell: zsh  # Optional, overrides default
+    cwd: "ops/k8s"  # Relative to repo root
+    confirmation: true
+    # continue_on_error not supported in MVP
+
+  - name: Restart deployment
+    command: "kubectl -n <namespace> rollout restart deploy/<service>"
+    confirmation: true
+
+  - name: Watch rollout
+    command: "kubectl -n <namespace> rollout status deploy/<service>"
+```
+
+---
+
+### K.17 Updated Config Schema
+
+Based on all decisions, the updated config (changes from previous version noted):
+
+```toml
+[repo]
+path = "/Users/chaz/.local/share/gitsavvy/repo"
+remote = "origin"
+branch = "main"
+sync_strategy = "rebase"  # ff-only|rebase|merge
+auto_reindex = true
+
+[identity]
+path = "platform/chaz"   # claimed write root inside repo
+mode = "pr"              # direct|pr
+team_prefix = "platform" # optional helper for validation/UI
+
+[git]
+author_name = "Chaz Straney"
+author_email = "chaz@example.com"
+sign_commits = false
+push_on_save = false     # in direct mode only
+pr_base_branch = "main"
+feature_branch_template = "gitsavvy/{identity}/{date}/{slug}"
+
+[workflows]
+root = "workflows"       # repo-relative
+shared_root = "shared"   # repo-relative
+draft_root = "drafts"    # repo-relative (gitignored)
+index_path = ".gitsavvy/index.json"  # gitignored
+schema_version = 1
+
+[runner]
+default_shell = "zsh"    # bash|zsh|sh|pwsh
+confirm_each_step = true
+stream_output = true
+max_output_lines = 5000
+dangerous_command_warnings = true
+
+# Placeholder settings
+[placeholders]
+prompt_style = "form"    # form|per-step
+save_defaults = "none"   # none|session|file (keychain is future)
+
+[tui]
+enabled = true
+theme = "default"
+show_help = true
+
+[editor]
+command = "vim"          # if unset, use $EDITOR
+
+[ai]
+enabled = false          # must be explicitly enabled
+provider = "openai_compat"
+base_url = "http://localhost:11434/v1" # optional for compat
+model = "gpt-4o-mini"
+api_key_env = "OPENAI_API_KEY"
+# redact = "basic"  # REMOVED - manual redaction only for MVP
+confirm_send = true
+```
+
+---
+
+### K.18 Gitignore Entries
+
+Add to the repository's `.gitignore`:
+
+```
+# Git-backed workflow tool
+.gitsavvy/index.json       # Local search index (auto-generated)
+
+# Drafts are local-only, never committed
+drafts/
+```
+
+---
+

@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/chazuruo/faire/internal/cli"
+	"github.com/chazuruo/svf/internal/cli"
 	"github.com/spf13/cobra"
 )
 
@@ -19,9 +19,9 @@ var Date = "unknown"
 
 func main() {
 	rootCmd := &cobra.Command{
-		Use:   "gitsavvy",
+		Use:   "svf",
 		Short: "Git-backed workflow automation tool",
-		Long: `git-savvy is a terminal-first workflow/runbook tool compatible with Savvy CLI,
+		Long: `svf is a terminal-first workflow/runbook tool compatible with Savvy CLI,
 but stores all workflows and metadata in a Git repository instead of a hosted backend.`,
 		Version: fmt.Sprintf("%s (commit: %s, built: %s)", Version, Commit, Date),
 		Run: func(cmd *cobra.Command, args []string) {

@@ -6,7 +6,7 @@ import (
 	"os"
 	"testing"
 
-	faireerrors "github.com/chazuruo/faire/internal/errors"
+	faireerrors "github.com/chazuruo/svf/internal/errors"
 )
 
 // TestBaseErrors verifies that all base error types have correct messages.

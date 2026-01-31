@@ -8,9 +8,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/chazuruo/faire/internal/config"
-	"github.com/chazuruo/faire/internal/gitrepo"
-	"github.com/chazuruo/faire/internal/workflows"
+	"github.com/chazuruo/svf/internal/config"
+	"github.com/chazuruo/svf/internal/gitrepo"
+	"github.com/chazuruo/svf/internal/workflows"
 )
 
 // FileSystemStore implements the Store interface using the filesystem.

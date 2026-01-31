@@ -12,7 +12,7 @@ import (
 	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/chazuruo/faire/internal/workflows"
+	"github.com/chazuruo/svf/internal/workflows"
 )
 
 // editingState represents the current editing mode.

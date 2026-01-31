@@ -17,7 +17,7 @@ func TestDefaultConfig(t *testing.T) {
 		optional bool // if true, we only check it's not empty
 	}{
 		// Repo section defaults
-		{"repo.path", cfg.Repo.Path, filepath.Join(os.Getenv("HOME"), ".local", "share", "gitsavvy", "repo"), false},
+		{"repo.path", cfg.Repo.Path, filepath.Join(os.Getenv("HOME"), ".local", "share", "svf", "repo"), false},
 		{"repo.remote", cfg.Repo.Remote, "origin", false},
 		{"repo.branch", cfg.Repo.Branch, "main", false},
 		{"repo.sync_strategy", cfg.Repo.SyncStrategy, "rebase", false},
@@ -34,13 +34,13 @@ func TestDefaultConfig(t *testing.T) {
 		{"git.sign_commits", cfg.Git.SignCommits, false, false},
 		{"git.push_on_save", cfg.Git.PushOnSave, false, false},
 		{"git.pr_base_branch", cfg.Git.PRBaseBranch, "main", false},
-		{"git.feature_branch_template", cfg.Git.FeatureBranchTemplate, "gitsavvy/{identity}/{date}/{slug}", false},
+		{"git.feature_branch_template", cfg.Git.FeatureBranchTemplate, "svf/{identity}/{date}/{slug}", false},
 
 		// Workflows section defaults
 		{"workflows.root", cfg.Workflows.Root, "workflows", false},
 		{"workflows.shared_root", cfg.Workflows.SharedRoot, "shared", false},
 		{"workflows.draft_root", cfg.Workflows.DraftRoot, "drafts", false},
-		{"workflows.index_path", cfg.Workflows.IndexPath, ".gitsavvy/index.json", false},
+		{"workflows.index_path", cfg.Workflows.IndexPath, ".svf/index.json", false},
 		{"workflows.schema_version", cfg.Workflows.SchemaVersion, 1, false},
 
 		// Runner section defaults
@@ -53,7 +53,7 @@ func TestDefaultConfig(t *testing.T) {
 		// Placeholders section defaults
 		{"placeholders.prompt_style", cfg.Placeholders.PromptStyle, "form", false},
 		{"placeholders.save_defaults", cfg.Placeholders.SaveDefaults, "none", false},
-		{"placeholders.keychain_service", cfg.Placeholders.KeychainService, "gitsavvy", false},
+		{"placeholders.keychain_service", cfg.Placeholders.KeychainService, "svf", false},
 
 		// TUI section defaults
 		{"tui.enabled", cfg.TUI.Enabled, true, false},

@@ -11,7 +11,7 @@ import (
 	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/chazuruo/faire/internal/workflows"
+	"github.com/chazuruo/svf/internal/workflows"
 )
 
 // PlaceholderEditorModel is the model for editing workflow placeholders.

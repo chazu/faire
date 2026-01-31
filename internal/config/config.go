@@ -195,7 +195,7 @@ func DefaultConfig() *Config {
 
 	return &Config{
 		Repo: RepoConfig{
-			Path:         filepath.Join(homeDir, ".local", "share", "gitsavvy", "repo"),
+			Path:         filepath.Join(homeDir, ".local", "share", "svf", "repo"),
 			Remote:       "origin",
 			Branch:       "main",
 			SyncStrategy: "rebase",
@@ -212,13 +212,13 @@ func DefaultConfig() *Config {
 			SignCommits:          false,
 			PushOnSave:           false,
 			PRBaseBranch:         "main",
-			FeatureBranchTemplate: "gitsavvy/{identity}/{date}/{slug}",
+			FeatureBranchTemplate: "svf/{identity}/{date}/{slug}",
 		},
 		Workflows: WorkflowsConfig{
 			Root:         "workflows",
 			SharedRoot:   "shared",
 			DraftRoot:    "drafts",
-			IndexPath:    ".gitsavvy/index.json",
+			IndexPath:    ".svf/index.json",
 			SchemaVersion: 1,
 		},
 		Runner: RunnerConfig{
@@ -231,7 +231,7 @@ func DefaultConfig() *Config {
 		Placeholders: PlaceholdersConfig{
 			PromptStyle:      "form",
 			SaveDefaults:     "none",
-			KeychainService:  "gitsavvy",
+			KeychainService:  "svf",
 		},
 		TUI: TUIConfig{
 			Enabled:  true,
@@ -427,5 +427,5 @@ func gitUserEmail() string {
 		}
 		return fmt.Sprintf("%s@localhost", usr.Username)
 	}
-	return "gitsavvy@localhost"
+	return "svf@localhost"
 }

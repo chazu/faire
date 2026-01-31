@@ -20,7 +20,7 @@ import (
 // Returns the first config file found, or empty string if none exists.
 //
 // Search order:
-// 1. ~/.config/gitsavvy/config.toml
+// 1. ~/.config/svf/config.toml
 //
 // Returns empty string if no config file is found (caller should use defaults).
 func DetectConfigPath() string {
@@ -29,8 +29,8 @@ func DetectConfigPath() string {
 		return ""
 	}
 
-	// Check ~/.config/gitsavvy/config.toml
-	configPath := filepath.Join(homeDir, ".config", "gitsavvy", "config.toml")
+	// Check ~/.config/svf/config.toml
+	configPath := filepath.Join(homeDir, ".config", "svf", "config.toml")
 	if _, err := os.Stat(configPath); err == nil {
 		return configPath
 	}

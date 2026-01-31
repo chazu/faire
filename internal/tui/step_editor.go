@@ -8,7 +8,7 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/chazuruo/faire/internal/workflows"
+	"github.com/chazuruo/svf/internal/workflows"
 )
 
 // StepEditorModel is the model for editing a single workflow step.

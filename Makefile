@@ -1,8 +1,8 @@
 .PHONY: all build test test-coverage test-short run clean fmt vet lint help
 
 # Build variables
-BINARY_NAME=gitsavvy
-MAIN_PATH=./cmd/gitsavvy
+BINARY_NAME=svf
+MAIN_PATH=./cmd/svf
 BUILD_DIR=./bin
 VERSION?=$(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 COMMIT?=$(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")

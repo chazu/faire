@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/chazuruo/faire/internal/app"
+	"github.com/chazuruo/svf/internal/app"
 	"github.com/spf13/cobra"
 )
 

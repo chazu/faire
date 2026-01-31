@@ -1,4 +1,4 @@
-# git-savvy
+# svf
 
 A Git-backed workflow automation tool, compatible with Savvy CLI but without any proprietary SaaS dependency. All workflows and metadata live in a Git repository of your choice.
 
@@ -22,19 +22,19 @@ A Git-backed workflow automation tool, compatible with Savvy CLI but without any
 
 ```bash
 # Clone the repository
-git clone https://github.com/chazu/faire.git
-cd faire
+git clone https://github.com/chazu/svf.git
+cd svf
 
 # Build using Make
 make build
 
-# The binary will be created at ./bin/gitsavvy
+# The binary will be created at ./bin/svf
 ```
 
 ### Build manually
 
 ```bash
-go build -ldflags "-X main.Version=$(git describe --tags --always) -X main.Commit=$(git rev-parse --short HEAD) -X main.Date=$(date -u +'%Y-%m-%dT%H:%M:%SZ')" -o bin/gitsavvy ./cmd/gitsavvy
+go build -ldflags "-X main.Version=$(git describe --tags --always) -X main.Commit=$(git rev-parse --short HEAD) -X main.Date=$(date -u +'%Y-%m-%dT%H:%M:%SZ')" -o bin/svf ./cmd/svf
 ```
 
 ## Development
@@ -74,7 +74,7 @@ make clean
 ```
 .
 ├── cmd/
-│   └── gitsavvy/          # Main entry point
+│   └── svf/               # Main entry point
 ├── internal/
 │   ├── app/               # Root orchestrator
 │   ├── cli/               # Cobra command definitions
@@ -99,7 +99,7 @@ make clean
 ## Version
 
 ```
-gitsavvy --version
+svf --version
 ```
 
 ## License

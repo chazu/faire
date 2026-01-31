@@ -8,11 +8,11 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
-	"github.com/chazuruo/faire/internal/config"
-	"github.com/chazuruo/faire/internal/gitrepo"
-	"github.com/chazuruo/faire/internal/tui"
-	"github.com/chazuruo/faire/internal/workflows"
-	"github.com/chazuruo/faire/internal/workflows/store"
+	"github.com/chazuruo/svf/internal/config"
+	"github.com/chazuruo/svf/internal/gitrepo"
+	"github.com/chazuruo/svf/internal/tui"
+	"github.com/chazuruo/svf/internal/workflows"
+	"github.com/chazuruo/svf/internal/workflows/store"
 )
 
 // EditOptions contains the options for the edit command.
