@@ -65,7 +65,7 @@ jobs:
         run: |
           mkdir -p dist
           go build -ldflags "-X main.Version=${VERSION} -X main.Commit=${COMMIT} -X main.Date=${BUILD_DATE}" \
-            -o dist/faire-${VERSION}-${GOOS}-${GOARCH} ./cmd/gitsavgy
+            -o dist/faire-${VERSION}-${GOOS}-${GOARCH} ./cmd/gitsavvy
 
       - name: Generate checksum
         run: |

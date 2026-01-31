@@ -12,7 +12,7 @@ VERSION="${1:-$(git -C "$PROJECT_ROOT" describe --tags --always --dirty 2>/dev/n
 COMMIT="$(git -C "$PROJECT_ROOT" rev-parse --short HEAD 2>/dev/null || echo "unknown")"
 BUILD_DATE="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 BINARY_NAME="faire"
-MAIN_PATH="./cmd/gitsavgy"
+MAIN_PATH="./cmd/gitsavvy"
 BUILD_DIR="$PROJECT_ROOT/bin"
 
 echo "Building ${BINARY_NAME}..."
