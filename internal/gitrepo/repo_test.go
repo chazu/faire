@@ -214,3 +214,74 @@ func TestGitRepo_Close(t *testing.T) {
 		t.Errorf("Close() error = %v", err)
 	}
 }
+
+func TestGitRepo_Status_Entries(t *testing.T) {
+	tmpDir := t.TempDir()
+	repo := New(tmpDir)
+	ctx := context.Background()
+
+	_ = repo.Init(ctx, InitOptions{})
+
+	// Create initial commit
+	testFile := filepath.Join(tmpDir, "initial.txt")
+	_ = os.WriteFile(testFile, []byte("initial"), 0644)
+	_ = repo.Add(ctx, "initial.txt")
+	_, _ = repo.CommitAll(ctx, "initial commit")
+
+	// Create a modified file
+	err := os.WriteFile(testFile, []byte("modified content"), 0644)
+	if err != nil {
+		t.Fatalf("failed to modify test file: %v", err)
+	}
+
+	// Create a new untracked file
+	newFile := filepath.Join(tmpDir, "new.txt")
+	_ = os.WriteFile(newFile, []byte("new"), 0644)
+
+	status, err := repo.Status(ctx)
+	if err != nil {
+		t.Fatalf("Status() error = %v", err)
+	}
+
+	if !status.Dirty {
+		t.Error("Status().Dirty = false, want true (repo has changes)")
+	}
+
+	if len(status.Entries) == 0 {
+		t.Error("Status().Entries is empty, want at least one entry")
+	}
+
+	// Check that entries have paths
+	for _, entry := range status.Entries {
+		if entry.Path == "" {
+			t.Error("StatusEntry.Path is empty")
+		}
+	}
+}
+
+func TestGitRepo_Status_AheadBehind(t *testing.T) {
+	tmpDir := t.TempDir()
+	repo := New(tmpDir)
+	ctx := context.Background()
+
+	_ = repo.Init(ctx, InitOptions{})
+
+	// Create initial commit
+	testFile := filepath.Join(tmpDir, "initial.txt")
+	_ = os.WriteFile(testFile, []byte("initial"), 0644)
+	_ = repo.Add(ctx, "initial.txt")
+	_, _ = repo.CommitAll(ctx, "initial commit")
+
+	status, err := repo.Status(ctx)
+	if err != nil {
+		t.Fatalf("Status() error = %v", err)
+	}
+
+	// No upstream set, so ahead/behind should be 0
+	if status.Ahead != 0 {
+		t.Errorf("Status().Ahead = %d, want 0", status.Ahead)
+	}
+	if status.Behind != 0 {
+		t.Errorf("Status().Behind = %d, want 0", status.Behind)
+	}
+}
