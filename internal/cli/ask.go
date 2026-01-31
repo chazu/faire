@@ -16,12 +16,14 @@ import (
 // AskOptions contains the options for the ask command.
 type AskOptions struct {
 	ConfigPath string
+	Prompt     string
 	Provider   string
 	Model      string
 	APIKeyEnv  string
 	As         string // "workflow" or "step"
 	Identity   string
 	NoCommit   bool
+	JSON       bool
 }
 
 // NewAskCommand creates the ask command.
@@ -55,12 +57,14 @@ Output format:
 	}
 
 	cmd.Flags().StringVar(&opts.ConfigPath, "config", "", "config file path")
+	cmd.Flags().StringVar(&opts.Prompt, "prompt", "", "Natural language prompt for workflow/step generation")
 	cmd.Flags().StringVar(&opts.Provider, "provider", "", "AI provider (openai, ollama, etc.)")
 	cmd.Flags().StringVar(&opts.Model, "model", "", "Model name")
 	cmd.Flags().StringVar(&opts.APIKeyEnv, "api-key-env", "", "Environment variable for API key")
 	cmd.Flags().StringVar(&opts.As, "as", "workflow", "Output format: workflow or step")
 	cmd.Flags().StringVar(&opts.Identity, "identity", "", "Identity path for the workflow")
 	cmd.Flags().BoolVar(&opts.NoCommit, "no-commit", false, "Don't commit to git after saving")
+	cmd.Flags().BoolVar(&opts.JSON, "json", false, "Output result as JSON")
 
 	return cmd
 }
@@ -100,23 +104,62 @@ func runAskInteractive(ctx context.Context, opts *AskOptions, cfg *config.Config
 
 // runAskNonInteractive runs ask command in non-interactive mode.
 func runAskNonInteractive(ctx context.Context, opts *AskOptions, cfg *config.Config) error {
+	// Check if prompt is provided
+	if opts.Prompt == "" {
+		return fmt.Errorf("prompt required for non-interactive mode.\nUsage: svf ask --prompt \"your prompt here\"")
+	}
+
 	// Build AI config
 	aiCfg := buildAIConfig(opts, cfg)
 
 	// Create provider
 	provider, err := ai.NewProvider(aiCfg)
 	if err != nil {
+		os.Exit(30) // Provider not configured
 		return fmt.Errorf("failed to create AI provider: %w", err)
 	}
 
 	// Check if provider is configured
 	if provider == nil {
+		os.Exit(30) // Provider not configured
 		return fmt.Errorf("AI provider not configured. Please configure AI in settings or use --provider flag")
 	}
 
-	// For non-interactive mode, we need a prompt from stdin or flag
-	// For now, return error since we don't have a prompt
-	return fmt.Errorf("non-interactive mode requires --prompt flag (not yet implemented)")
+	// Generate workflow
+	wf, err := generateWorkflow(ctx, provider, opts.Prompt, opts)
+	if err != nil {
+		os.Exit(31) // Provider error
+		return fmt.Errorf("failed to generate workflow: %w", err)
+	}
+
+	// Output result
+	if opts.JSON {
+		return outputWorkflowJSON(wf)
+	}
+
+	return outputWorkflowText(wf)
+}
+
+// outputWorkflowJSON outputs workflow as JSON.
+func outputWorkflowJSON(wf *workflows.Workflow) error {
+	// Use the export package to output JSON
+	// For now, just print basic info
+	fmt.Printf(`{"title":"%s","description":"%s","steps":%d}`, wf.Title, wf.Description, len(wf.Steps))
+	return nil
+}
+
+// outputWorkflowText outputs workflow as text.
+func outputWorkflowText(wf *workflows.Workflow) error {
+	fmt.Printf("Title: %s\n", wf.Title)
+	if wf.Description != "" {
+		fmt.Printf("Description: %s\n", wf.Description)
+	}
+	fmt.Printf("Steps: %d\n", len(wf.Steps))
+	for i, step := range wf.Steps {
+		fmt.Printf("\n%d. %s\n", i+1, step.Name)
+		fmt.Printf("   %s\n", step.Command)
+	}
+	return nil
 }
 
 // buildAIConfig builds AI config from options and global config.
