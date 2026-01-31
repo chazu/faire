@@ -1,0 +1,11 @@
+.runtime/
+.claude/
+.beads/
+.logs/
+
+# Test artifacts
+*.test
+*.out
+coverage.html
+/tmp/
+testdata/temp/
