@@ -208,6 +208,13 @@ func runInitInteractive(opts *InitOptions) error {
 		return err
 	}
 
+	// Verify that the repository is actually initialized at the configured path
+	repo := gitrepo.New(finalCfg.Repo.Path)
+	ctx := context.Background()
+	if !repo.IsInitialized(ctx) {
+		return fmt.Errorf("repository was not initialized correctly at %s. Please check the path and try 'svf init' again", finalCfg.Repo.Path)
+	}
+
 	// Summary
 	fmt.Println("\n✓ Configuration written successfully!")
 	fmt.Printf("  Config: %s\n", getConfigPath(opts.ConfigPath))
@@ -286,6 +293,13 @@ func runInitNonInteractive(opts *InitOptions) error {
 
 	if err := config.Write(configPath, cfg); err != nil {
 		return fmt.Errorf("failed to write config: %w", err)
+	}
+
+	// Verify that the repository is actually initialized at the configured path
+	repo := gitrepo.New(cfg.Repo.Path)
+	ctx := context.Background()
+	if !repo.IsInitialized(ctx) {
+		return fmt.Errorf("repository was not initialized correctly at %s. Please check the path and try 'svf init' again", cfg.Repo.Path)
 	}
 
 	fmt.Printf("Configuration written to: %s\n", configPath)

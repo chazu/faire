@@ -53,7 +53,13 @@ func runList(opts *ListOptions) error {
 	ctx := context.Background()
 
 	// Load config
-	cfg, err := config.LoadWithDefaults()
+	var cfg *config.Config
+	var err error
+	if opts.ConfigPath != "" {
+		cfg, err = config.Load(opts.ConfigPath)
+	} else {
+		cfg, err = config.LoadWithDefaults()
+	}
 	if err != nil {
 		return fmt.Errorf("failed to load config: %w", err)
 	}
@@ -61,7 +67,7 @@ func runList(opts *ListOptions) error {
 	// Open repo
 	repo := gitrepo.New(cfg.Repo.Path)
 	if !repo.IsInitialized(ctx) {
-		return fmt.Errorf("repository not initialized. Run 'svf init' first")
+		return fmt.Errorf("repository not initialized at %s. Run 'svf init' first, or check your config at %s", cfg.Repo.Path, config.DetectConfigPath())
 	}
 
 	// Create store
