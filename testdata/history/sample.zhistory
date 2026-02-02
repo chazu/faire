@@ -1,0 +1,15 @@
+:1616420000:0:git status
+:1616420100:0:git commit -m "feat: add new feature"
+:1616420200:0:git push origin main
+:1616420300:0:cd ~/projects
+:1616420400:0:ls -la
+:1616420500:0:pwd
+:1616420600:0:go test ./...
+:1616420700:0:go build -o bin/app
+:1616420800:0:echo "hello world"
+:1616420900:0:make build
+:1616421000:0:make test
+:1616421100:0:echo "multi-line \
+:1616421101:0:command \
+:1616421102:0:continuation"
+:1616421200:0:git status
