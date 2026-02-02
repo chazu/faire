@@ -1,0 +1,103 @@
+{
+  "SchemaVersion": 1,
+  "ID": "wf_02ABC123DEF45678",
+  "Title": "Multi-Step Deployment Workflow",
+  "Description": "Complex deployment workflow with multiple steps, error handling, and environment variables",
+  "Tags": [
+    "deployment",
+    "kubernetes",
+    "production"
+  ],
+  "Defaults": {
+    "Shell": "zsh",
+    "CWD": "/deploy",
+    "ConfirmEachStep": false
+  },
+  "Placeholders": {
+    "environment": {
+      "Prompt": "Deployment environment",
+      "Default": "staging",
+      "Validate": "^(dev|staging|prod)$",
+      "Secret": false
+    },
+    "version": {
+      "Prompt": "Application version",
+      "Default": "",
+      "Validate": "^v[0-9]+\\.[0-9]+\\.[0-9]+$",
+      "Secret": false
+    }
+  },
+  "Steps": [
+    {
+      "Name": "Pre-flight checks",
+      "Command": "kubectl cluster-info",
+      "Shell": "",
+      "CWD": "",
+      "Env": null,
+      "ContinueOnError": false,
+      "Confirmation": {
+        "Prompt": "Check cluster connectivity?"
+      }
+    },
+    {
+      "Name": "Set context",
+      "Command": "kubectl config use-context \u003cenvironment\u003e",
+      "Shell": "",
+      "CWD": "",
+      "Env": {
+        "KUBECONFIG": "/etc/deploy/kubeconfig"
+      },
+      "ContinueOnError": false,
+      "Confirmation": null
+    },
+    {
+      "Name": "Build container image",
+      "Command": "docker build -t myapp:\u003cversion\u003e .",
+      "Shell": "",
+      "CWD": "",
+      "Env": null,
+      "ContinueOnError": false,
+      "Confirmation": {
+        "Prompt": "Build image for version \u003cversion\u003e?"
+      }
+    },
+    {
+      "Name": "Push to registry",
+      "Command": "docker push myapp:\u003cversion\u003e",
+      "Shell": "",
+      "CWD": "",
+      "Env": null,
+      "ContinueOnError": false,
+      "Confirmation": null
+    },
+    {
+      "Name": "Update deployment",
+      "Command": "kubectl set image deployment/myapp myapp=myapp:\u003cversion\u003e -n \u003cenvironment\u003e",
+      "Shell": "",
+      "CWD": "",
+      "Env": null,
+      "ContinueOnError": false,
+      "Confirmation": {
+        "Prompt": ""
+      }
+    },
+    {
+      "Name": "Verify rollout",
+      "Command": "kubectl rollout status deployment/myapp -n \u003cenvironment\u003e",
+      "Shell": "",
+      "CWD": "",
+      "Env": null,
+      "ContinueOnError": false,
+      "Confirmation": null
+    },
+    {
+      "Name": "Check pod health",
+      "Command": "kubectl get pods -n \u003cenvironment\u003e -l app=myapp",
+      "Shell": "",
+      "CWD": "",
+      "Env": null,
+      "ContinueOnError": false,
+      "Confirmation": null
+    }
+  ]
+}
