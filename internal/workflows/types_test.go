@@ -1,8 +1,10 @@
 package workflows
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -349,4 +351,197 @@ type yamlDecoderImpl struct {
 
 func (d *yamlDecoderImpl) Decode(v interface{}) error {
 	return yaml.Unmarshal(d.data, v)
+}
+
+// Tests for parse.go functions
+
+func TestLoadYAML(t *testing.T) {
+	fixtureDir := filepath.Join("..", "..", "testdata", "workflows")
+
+	validFixtures := []string{
+		"minimal.yaml",
+		"with_placeholders.yaml",
+		"multi_step.yaml",
+	}
+
+	for _, fixture := range validFixtures {
+		t.Run(fixture, func(t *testing.T) {
+			path := filepath.Join(fixtureDir, fixture)
+
+			wf, err := LoadYAML(path)
+			require.NoError(t, err)
+			require.NotNil(t, wf)
+
+			// Verify the workflow is properly validated
+			assert.NotEmpty(t, wf.Title)
+			assert.NotEmpty(t, wf.Steps)
+		})
+	}
+}
+
+func TestLoadYAML_FileNotFound(t *testing.T) {
+	wf, err := LoadYAML("/nonexistent/path/to/workflow.yaml")
+	assert.Error(t, err)
+	assert.Nil(t, wf)
+}
+
+func TestLoadYAML_InvalidYAML(t *testing.T) {
+	// Create a temporary file with invalid YAML
+	tmpDir := t.TempDir()
+	invalidPath := filepath.Join(tmpDir, "invalid.yaml")
+	err := os.WriteFile(invalidPath, []byte("invalid: yaml: content: ["), 0644)
+	require.NoError(t, err)
+
+	wf, err := LoadYAML(invalidPath)
+	assert.Error(t, err)
+	assert.Nil(t, wf)
+}
+
+func TestLoadYAML_ValidationFailure(t *testing.T) {
+	// Create a temporary file with valid YAML but invalid workflow
+	tmpDir := t.TempDir()
+	invalidPath := filepath.Join(tmpDir, "no-title.yaml")
+	err := os.WriteFile(invalidPath, []byte(`
+schema_version: 1
+steps:
+  - command: echo "test"
+`), 0644)
+	require.NoError(t, err)
+
+	wf, err := LoadYAML(invalidPath)
+	assert.Error(t, err)
+	assert.Nil(t, wf)
+	assert.Contains(t, err.Error(), "title is required")
+}
+
+func TestLoadYAMLReader(t *testing.T) {
+	yamlData := []byte(`
+schema_version: 1
+title: Test Workflow
+steps:
+  - name: Test step
+    command: echo "test"
+`)
+
+	wf, err := LoadYAMLReader(strings.NewReader(string(yamlData)))
+	require.NoError(t, err)
+	require.NotNil(t, wf)
+
+	assert.Equal(t, "Test Workflow", wf.Title)
+	assert.Len(t, wf.Steps, 1)
+	assert.Equal(t, "Test step", wf.Steps[0].Name)
+}
+
+func TestLoadYAMLReader_InvalidYAML(t *testing.T) {
+	wf, err := LoadYAMLReader(strings.NewReader("invalid: yaml: ["))
+	assert.Error(t, err)
+	assert.Nil(t, wf)
+}
+
+func TestLoadYAMLReader_Empty(t *testing.T) {
+	wf, err := LoadYAMLReader(strings.NewReader(""))
+	assert.Error(t, err)
+	assert.Nil(t, wf)
+}
+
+// Golden file tests
+
+func TestGoldenFile_Minimal(t *testing.T) {
+	goldenPath := filepath.Join("..", "..", "testdata", "workflows", "minimal.yaml")
+	goldenFile := filepath.Join("testdata", "golden", "minimal.json")
+
+	wf, err := LoadYAML(goldenPath)
+	require.NoError(t, err)
+
+	// Update golden file: go test ./internal/workflows/... -update-golden
+	if update := os.Getenv("UPDATE_GOLDEN"); update != "" {
+		// Create testdata directory if it doesn't exist
+		os.MkdirAll("testdata/golden", 0755)
+
+		// Marshal to JSON for golden file (more stable than YAML for comparison)
+		data, err := jsonMarshalWorkflow(wf)
+		require.NoError(t, err)
+		os.WriteFile(goldenFile, data, 0644)
+		t.SkipNow()
+	}
+
+	// Check if golden file exists, skip if not (first run)
+	if _, err := os.Stat(goldenFile); os.IsNotExist(err) {
+		t.Skip("Golden file does not exist. Run with UPDATE_GOLDEN=1 to create it.")
+		return
+	}
+
+	// Load golden file and compare
+	goldenData, err := os.ReadFile(goldenFile)
+	require.NoError(t, err)
+
+	// Marshal current workflow and compare
+	currentData, err := jsonMarshalWorkflow(wf)
+	require.NoError(t, err)
+
+	assert.JSONEq(t, string(goldenData), string(currentData))
+}
+
+func TestGoldenFile_WithPlaceholders(t *testing.T) {
+	goldenPath := filepath.Join("..", "..", "testdata", "workflows", "with_placeholders.yaml")
+	goldenFile := filepath.Join("testdata", "golden", "with_placeholders.json")
+
+	wf, err := LoadYAML(goldenPath)
+	require.NoError(t, err)
+
+	if update := os.Getenv("UPDATE_GOLDEN"); update != "" {
+		os.MkdirAll("testdata/golden", 0755)
+		data, err := jsonMarshalWorkflow(wf)
+		require.NoError(t, err)
+		os.WriteFile(goldenFile, data, 0644)
+		t.SkipNow()
+	}
+
+	if _, err := os.Stat(goldenFile); os.IsNotExist(err) {
+		t.Skip("Golden file does not exist. Run with UPDATE_GOLDEN=1 to create it.")
+		return
+	}
+
+	goldenData, err := os.ReadFile(goldenFile)
+	require.NoError(t, err)
+
+	currentData, err := jsonMarshalWorkflow(wf)
+	require.NoError(t, err)
+
+	assert.JSONEq(t, string(goldenData), string(currentData))
+}
+
+func TestGoldenFile_MultiStep(t *testing.T) {
+	goldenPath := filepath.Join("..", "..", "testdata", "workflows", "multi_step.yaml")
+	goldenFile := filepath.Join("testdata", "golden", "multi_step.json")
+
+	wf, err := LoadYAML(goldenPath)
+	require.NoError(t, err)
+
+	if update := os.Getenv("UPDATE_GOLDEN"); update != "" {
+		os.MkdirAll("testdata/golden", 0755)
+		data, err := jsonMarshalWorkflow(wf)
+		require.NoError(t, err)
+		os.WriteFile(goldenFile, data, 0644)
+		t.SkipNow()
+	}
+
+	if _, err := os.Stat(goldenFile); os.IsNotExist(err) {
+		t.Skip("Golden file does not exist. Run with UPDATE_GOLDEN=1 to create it.")
+		return
+	}
+
+	goldenData, err := os.ReadFile(goldenFile)
+	require.NoError(t, err)
+
+	currentData, err := jsonMarshalWorkflow(wf)
+	require.NoError(t, err)
+
+	assert.JSONEq(t, string(goldenData), string(currentData))
+}
+
+// jsonMarshalWorkflow marshals a workflow to JSON for golden file comparison
+func jsonMarshalWorkflow(wf *Workflow) ([]byte, error) {
+	// Use encoding/json for stable output
+	return json.MarshalIndent(wf, "", "  ")
 }

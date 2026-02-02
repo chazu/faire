@@ -1,0 +1,73 @@
+{
+  "SchemaVersion": 1,
+  "ID": "wf_01HZY3J9Y3G6Q9T3",
+  "Title": "Workflow with Placeholders",
+  "Description": "Demonstrates placeholder usage in workflows",
+  "Tags": [
+    "example",
+    "placeholders"
+  ],
+  "Defaults": {
+    "Shell": "bash",
+    "CWD": ".",
+    "ConfirmEachStep": true
+  },
+  "Placeholders": {
+    "api_key": {
+      "Prompt": "API Key",
+      "Default": "",
+      "Validate": "",
+      "Secret": true
+    },
+    "namespace": {
+      "Prompt": "Kubernetes namespace",
+      "Default": "default",
+      "Validate": "",
+      "Secret": false
+    },
+    "service": {
+      "Prompt": "Service name",
+      "Default": "foo-service",
+      "Validate": "^[a-z0-9-]+$",
+      "Secret": false
+    }
+  },
+  "Steps": [
+    {
+      "Name": "Check current pods",
+      "Command": "kubectl -n \u003cnamespace\u003e get pods -l app=\u003cservice\u003e",
+      "Shell": "",
+      "CWD": "",
+      "Env": null,
+      "ContinueOnError": false,
+      "Confirmation": null
+    },
+    {
+      "Name": "Restart deployment",
+      "Command": "kubectl -n \u003cnamespace\u003e rollout restart deploy/\u003cservice\u003e",
+      "Shell": "",
+      "CWD": "",
+      "Env": null,
+      "ContinueOnError": false,
+      "Confirmation": null
+    },
+    {
+      "Name": "Watch rollout",
+      "Command": "kubectl -n \u003cnamespace\u003e rollout status deploy/\u003cservice\u003e",
+      "Shell": "",
+      "CWD": "",
+      "Env": null,
+      "ContinueOnError": false,
+      "Confirmation": null
+    },
+    {
+      "Name": "API call with secret",
+      "Command": "curl -H 'Authorization: Bearer \u003capi_key\u003e' https://api.example.com",
+      "Shell": "",
+      "CWD": "",
+      "Env": null,
+      "ContinueOnError": false,
+      "Confirmation": null
+    }
+  ]
+}
