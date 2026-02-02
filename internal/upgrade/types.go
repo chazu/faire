@@ -1,33 +1,6 @@
 // Package upgrade implements self-update functionality for svf.
 package upgrade
 
-import "time"
-
-// Release represents a GitHub release.
-type Release struct {
-	TagName     string    `json:"tag_name"`
-	Name        string    `json:"name"`
-	PublishedAt time.Time `json:"published_at"`
-	Body        string    `json:"body"`
-	Assets      []Asset   `json:"assets"`
-	Prerelease  bool      `json:"prerelease"`
-}
-
-// Asset represents a release asset.
-type Asset struct {
-	Name string `json:"name"`
-	URL  string `json:"browser_download_url"`
-	Size int64  `json:"size"`
-}
-
-// VersionInfo holds version comparison results.
-type VersionInfo struct {
-	CurrentVersion  string
-	LatestVersion   string
-	UpdateAvailable bool
-	Prerelease      bool
-}
-
 // Platform identifies the current platform.
 type Platform struct {
 	OS   string // runtime.GOOS
