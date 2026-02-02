@@ -23,6 +23,7 @@ type AskOptions struct {
 	Provider   string
 	Model      string
 	APIKeyEnv  string
+	Redact     string // "none", "basic", "strict"
 	As         string // "workflow" or "step"
 	Identity   string
 	NoCommit   bool
@@ -64,6 +65,7 @@ Output format:
 	cmd.Flags().StringVar(&opts.Provider, "provider", "", "AI provider (openai, ollama, etc.)")
 	cmd.Flags().StringVar(&opts.Model, "model", "", "Model name")
 	cmd.Flags().StringVar(&opts.APIKeyEnv, "api-key-env", "", "Environment variable for API key")
+	cmd.Flags().StringVar(&opts.Redact, "redact", "", "Redaction level: none, basic, strict (default from config)")
 	cmd.Flags().StringVar(&opts.As, "as", "workflow", "Output format: workflow or step")
 	cmd.Flags().StringVar(&opts.Identity, "identity", "", "Identity path for the workflow")
 	cmd.Flags().BoolVar(&opts.NoCommit, "no-commit", false, "Don't commit to git after saving")
@@ -79,6 +81,49 @@ func runAsk(opts *AskOptions) error {
 	cfg, err := config.LoadWithDefaults()
 	if err != nil {
 		return fmt.Errorf("failed to load config: %w", err)
+	}
+
+	// Check if AI is enabled
+	if !cfg.AI.Enabled {
+		fmt.Fprintln(os.Stderr, "AI is not enabled. Please configure AI first:")
+		fmt.Fprintln(os.Stderr, "")
+		fmt.Fprintln(os.Stderr, "1. Set ai.enabled = true in your config file")
+		fmt.Fprintln(os.Stderr, "2. Set ai.provider (e.g., \"openai_compat\")")
+		fmt.Fprintln(os.Stderr, "3. Set ai.model (e.g., \"gpt-4o-mini\")")
+		fmt.Fprintln(os.Stderr, "4. Set ai.api_key_env (e.g., \"OPENAI_API_KEY\")")
+		fmt.Fprintln(os.Stderr, "5. Set the API key in the environment")
+		fmt.Fprintln(os.Stderr, "")
+		fmt.Fprintln(os.Stderr, "Example config:")
+		fmt.Fprintln(os.Stderr, "  [ai]")
+		fmt.Fprintln(os.Stderr, "  enabled = true")
+		fmt.Fprintln(os.Stderr, "  provider = \"openai_compat\"")
+		fmt.Fprintln(os.Stderr, "  base_url = \"http://localhost:11434/v1\"")
+		fmt.Fprintln(os.Stderr, "  model = \"gpt-4o-mini\"")
+		fmt.Fprintln(os.Stderr, "  api_key_env = \"OPENAI_API_KEY\"")
+		fmt.Fprintln(os.Stderr, "  redact = \"basic\"")
+		fmt.Fprintln(os.Stderr, "")
+		os.Exit(30)
+		return nil
+	}
+
+	// Determine API key env var to use
+	apiKeyEnv := cfg.AI.APIKeyEnv
+	if opts.APIKeyEnv != "" {
+		apiKeyEnv = opts.APIKeyEnv
+	}
+	if apiKeyEnv == "" {
+		fmt.Fprintln(os.Stderr, "AI API key environment variable not configured.")
+		fmt.Fprintln(os.Stderr, "Set ai.api_key_env in your config or use --api-key-env flag.")
+		os.Exit(30)
+		return nil
+	}
+
+	// Check if API key is set in environment
+	apiKey := os.Getenv(apiKeyEnv)
+	if apiKey == "" {
+		fmt.Fprintf(os.Stderr, "AI API key not found. Set the %s environment variable.\n", apiKeyEnv)
+		os.Exit(30)
+		return nil
 	}
 
 	// Open repo
@@ -103,6 +148,7 @@ func runAskInteractive(ctx context.Context, opts *AskOptions, cfg *config.Config
 		Provider:  opts.Provider,
 		Model:     opts.Model,
 		APIKeyEnv: opts.APIKeyEnv,
+		Redact:    opts.Redact,
 		As:        opts.As,
 		Identity:  opts.Identity,
 		NoCommit:  opts.NoCommit,

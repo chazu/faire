@@ -23,6 +23,8 @@ const (
 	AskStatePrompting AskState = iota
 	// AskStateRedacting means user is reviewing/redacting sensitive data.
 	AskStateRedacting
+	// AskStatePrivacyConfirming means user is confirming to send to AI.
+	AskStatePrivacyConfirming
 	// AskStateGenerating means AI is generating the workflow.
 	AskStateGenerating
 	// AskStateReviewing means user is reviewing the generated workflow.
@@ -72,6 +74,7 @@ type AskOptions struct {
 	Provider  string
 	Model     string
 	APIKeyEnv string
+	Redact    string // "none", "basic", "strict"
 	As        string // "workflow" or "step"
 	Identity  string
 	NoCommit  bool
@@ -162,9 +165,9 @@ func (m *AskModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		// Check if redaction is done
 		if m.redactionModel.DidConfirm() {
-			// User confirmed, proceed to generation
-			m.state = AskStateGenerating
-			return m, m.generateWorkflow()
+			// User confirmed, proceed to privacy confirmation
+			m.state = AskStatePrivacyConfirming
+			return m, nil
 		}
 		if m.redactionModel.DidCancel() {
 			// User canceled, go back to prompt
@@ -172,6 +175,10 @@ func (m *AskModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.redactionModel = RedactionModel{}
 			return m, nil
 		}
+
+	case AskStatePrivacyConfirming:
+		// Privacy confirmation state - handled in handleKey
+		// Just wait for user input
 
 	case AskStateReviewing:
 		var cmd tea.Cmd
@@ -220,6 +227,34 @@ func (m *AskModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 			// Move to redaction
 			m.redactionModel = NewRedactionModel(prompt)
+			m.state = AskStateRedacting
+			return m, nil
+		}
+
+	case tea.KeyEnter:
+		if m.state == AskStatePrivacyConfirming {
+			// User confirmed, proceed to generation
+			m.state = AskStateGenerating
+			return m, m.generateWorkflow()
+		}
+
+	case tea.KeyEsc:
+		if m.state == AskStatePrivacyConfirming {
+			// User went back, return to redaction
+			m.state = AskStateRedacting
+			return m, nil
+		}
+
+	case 'y', 'Y':
+		if m.state == AskStatePrivacyConfirming {
+			// User confirmed, proceed to generation
+			m.state = AskStateGenerating
+			return m, m.generateWorkflow()
+		}
+
+	case 'n', 'N':
+		if m.state == AskStatePrivacyConfirming {
+			// User declined, return to redaction
 			m.state = AskStateRedacting
 			return m, nil
 		}
@@ -302,6 +337,8 @@ func (m *AskModel) View() string {
 		return m.renderPromptView()
 	case AskStateRedacting:
 		return m.redactionModel.View()
+	case AskStatePrivacyConfirming:
+		return m.renderPrivacyConfirmView()
 	case AskStateGenerating:
 		return m.renderGeneratingView()
 	case AskStateReviewing:
@@ -344,6 +381,97 @@ func (m *AskModel) renderPromptView() string {
 	)
 
 	b.WriteString(footer)
+
+	return b.String()
+}
+
+// renderPrivacyConfirmView renders the privacy confirmation view.
+func (m *AskModel) renderPrivacyConfirmView() string {
+	var b strings.Builder
+
+	b.WriteString(m.headerStyle.Render("🔐 Confirm Sending to AI"))
+	b.WriteString("\n\n")
+
+	// Warning
+	warningStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("226")).
+		Bold(true)
+	b.WriteString(warningStyle.Render("⚠️  Your data will be sent to an external AI provider."))
+	b.WriteString("\n\n")
+
+	// Provider info section
+	infoStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("86")).
+		Bold(true)
+	b.WriteString(infoStyle.Render("Provider Configuration:"))
+	b.WriteString("\n\n")
+
+	// Build AI config to get the actual values
+	aiCfg := m.buildAIConfig()
+	providerName := aiCfg.Provider
+	if providerName == "" {
+		providerName = m.cfg.AI.Provider
+	}
+	modelName := aiCfg.Model
+	if modelName == "" {
+		modelName = m.cfg.AI.Model
+	}
+
+	// Redaction level
+	redactLevel := m.cfg.AI.Redact
+	if m.opts.Redact != "" {
+		redactLevel = m.opts.Redact
+	}
+	if redactLevel == "" {
+		redactLevel = "basic"
+	}
+
+	statStyle := lipgloss.NewStyle().
+		Width(35)
+
+	b.WriteString(statStyle.Render(fmt.Sprintf("  Provider: %s", providerName)))
+	b.WriteString(statStyle.Render(fmt.Sprintf("  Model: %s", modelName)))
+	b.WriteString(statStyle.Render(fmt.Sprintf("  Redaction: %s", redactLevel)))
+	b.WriteString("\n\n")
+
+	// Content preview
+	b.WriteString(infoStyle.Render("Your Prompt:"))
+	b.WriteString("\n\n")
+
+	// Show redacted content
+	redactedContent := m.redactionModel.GetRedactedContent()
+
+	// Create a box for the content
+	boxStyle := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("240")).
+		Padding(0, 1)
+
+	// Truncate if too long
+	maxPreviewLen := 500
+	preview := redactedContent
+	if len(preview) > maxPreviewLen {
+		preview = preview[:maxPreviewLen] + "\n... (truncated)"
+	}
+
+	b.WriteString(boxStyle.Render(preview))
+	b.WriteString("\n\n")
+
+	// Confirmation prompt
+	b.WriteString("Send to AI? ")
+	confirmStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("86")).
+		Bold(true)
+	b.WriteString(confirmStyle.Render("[y/N]"))
+	b.WriteString("\n\n")
+
+	// Footer
+	footerStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("241"))
+
+	b.WriteString(footerStyle.Render(
+		" [y]: Yes, send  [n/ESC]: No, go back  [Ctrl+C]: quit",
+	))
 
 	return b.String()
 }
