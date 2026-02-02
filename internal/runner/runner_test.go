@@ -381,7 +381,7 @@ func TestWithShell(t *testing.T) {
 
 func TestWithStreamOutput(t *testing.T) {
 	r := NewRunner(WithStreamOutput(false)).(*runner)
-	if r.streamOutput {
+	if r.streamOutput == nil || *r.streamOutput {
 		t.Error("expected streamOutput to be false")
 	}
 }
