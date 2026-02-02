@@ -4,6 +4,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -58,10 +59,23 @@ func runList(opts *ListOptions) error {
 		return fmt.Errorf("failed to load config: %w", err)
 	}
 
-	// Open repo
-	repo := gitrepo.New(cfg.Repo.Path)
+	// Open repo - try configured path first, fall back to current directory
+	repoPath := cfg.Repo.Path
+	repo := gitrepo.New(repoPath)
 	if !repo.IsInitialized(ctx) {
-		return fmt.Errorf("repository not initialized. Run 'svf init' first")
+		// Configured repo not initialized, try current working directory
+		wd, err := os.Getwd()
+		if err == nil {
+			currentDirRepo := gitrepo.New(wd)
+			if currentDirRepo.IsInitialized(ctx) {
+				repo = currentDirRepo
+				repoPath = wd
+			} else {
+				return fmt.Errorf("repository not initialized. Run 'svf init' first, or 'git init' in your project directory")
+			}
+		} else {
+			return fmt.Errorf("repository not initialized. Run 'svf init' first")
+		}
 	}
 
 	// Create store
