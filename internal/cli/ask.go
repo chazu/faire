@@ -9,6 +9,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
 	"github.com/chazuruo/svf/internal/ai"
+	"github.com/chazuruo/svf/internal/app"
 	"github.com/chazuruo/svf/internal/config"
 	"github.com/chazuruo/svf/internal/gitrepo"
 	"github.com/chazuruo/svf/internal/tui"
@@ -25,6 +26,7 @@ type AskOptions struct {
 	APIKeyEnv  string
 	As         string // "workflow" or "step"
 	Identity   string
+	Redact     string // "none", "basic", "strict"
 	NoCommit   bool
 	JSON       bool
 }
@@ -66,6 +68,7 @@ Output format:
 	cmd.Flags().StringVar(&opts.APIKeyEnv, "api-key-env", "", "Environment variable for API key")
 	cmd.Flags().StringVar(&opts.As, "as", "workflow", "Output format: workflow or step")
 	cmd.Flags().StringVar(&opts.Identity, "identity", "", "Identity path for the workflow")
+	cmd.Flags().StringVar(&opts.Redact, "redact", "basic", "Redaction level: none, basic, or strict (default basic)")
 	cmd.Flags().BoolVar(&opts.NoCommit, "no-commit", false, "Don't commit to git after saving")
 	cmd.Flags().BoolVar(&opts.JSON, "json", false, "Output result as JSON")
 
@@ -105,6 +108,7 @@ func runAskInteractive(ctx context.Context, opts *AskOptions, cfg *config.Config
 		APIKeyEnv: opts.APIKeyEnv,
 		As:        opts.As,
 		Identity:  opts.Identity,
+		Redact:    app.RedactionLevel(opts.Redact),
 		NoCommit:  opts.NoCommit,
 	}
 
@@ -200,35 +204,40 @@ func runAskNonInteractive(ctx context.Context, opts *AskOptions, cfg *config.Con
 		return fmt.Errorf("prompt required for non-interactive mode.\nUsage: svf ask --prompt \"your prompt here\"")
 	}
 
-	// Build AI config
-	aiCfg := buildAIConfig(opts, cfg)
-
-	// Create provider
-	provider, err := ai.NewProvider(aiCfg)
-	if err != nil {
-		os.Exit(30) // Provider not configured
-		return fmt.Errorf("failed to create AI provider: %w", err)
-	}
-
-	// Check if provider is configured
-	if provider == nil {
-		os.Exit(30) // Provider not configured
-		return fmt.Errorf("AI provider not configured. Please configure AI in settings or use --provider flag")
+	// Build app options
+	appOpts := &app.AskOptions{
+		Prompt:    opts.Prompt,
+		Provider:  opts.Provider,
+		Model:     opts.Model,
+		APIKeyEnv: opts.APIKeyEnv,
+		As:        opts.As,
+		Identity:  opts.Identity,
+		Redact:    app.RedactionLevel(opts.Redact),
 	}
 
 	// Generate workflow
-	wf, err := generateWorkflow(ctx, provider, opts.Prompt, opts)
+	result, err := app.GenerateWorkflow(ctx, cfg, appOpts)
 	if err != nil {
-		os.Exit(31) // Provider error
+		// Handle specific error types with proper exit codes
+		if app.IsConfigError(err) {
+			fmt.Fprintln(os.Stderr, err.Error())
+			os.Exit(30)
+			return err
+		}
+		if app.IsProviderError(err) {
+			fmt.Fprintln(os.Stderr, err.Error())
+			os.Exit(31)
+			return err
+		}
 		return fmt.Errorf("failed to generate workflow: %w", err)
 	}
 
 	// Output result
 	if opts.JSON {
-		return outputWorkflowJSON(wf)
+		return outputWorkflowJSON(result.Workflow)
 	}
 
-	return outputWorkflowText(wf)
+	return outputWorkflowText(result.Workflow)
 }
 
 // outputWorkflowJSON outputs workflow as JSON.

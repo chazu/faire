@@ -4,13 +4,13 @@ package tui
 import (
 	"context"
 	"fmt"
-	"os"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/chazuruo/svf/internal/ai"
+	"github.com/chazuruo/svf/internal/app"
 	"github.com/chazuruo/svf/internal/config"
 	"github.com/chazuruo/svf/internal/workflows"
 )
@@ -21,8 +21,8 @@ type AskState int
 const (
 	// AskStatePrompting means user is entering their prompt.
 	AskStatePrompting AskState = iota
-	// AskStateRedacting means user is reviewing/redacting sensitive data.
-	AskStateRedacting
+	// AskStatePreviewing means user is previewing what will be sent to AI.
+	AskStatePreviewing
 	// AskStateGenerating means AI is generating the workflow.
 	AskStateGenerating
 	// AskStateReviewing means user is reviewing the generated workflow.
@@ -41,8 +41,8 @@ type AskModel struct {
 	// Prompt input
 	promptInput textarea.Model
 
-	// Redaction model
-	redactionModel RedactionModel
+	// AI preview model (simple privacy confirmation)
+	aiPreviewModel AIPreviewModel
 
 	// Generated workflow
 	generatedWorkflow *workflows.Workflow
@@ -74,11 +74,39 @@ type AskOptions struct {
 	APIKeyEnv string
 	As        string // "workflow" or "step"
 	Identity  string
+	Redact    app.RedactionLevel
 	NoCommit  bool
 }
 
 // NewAskModel creates a new ask model.
 func NewAskModel(ctx context.Context, cfg *config.Config, opts *AskOptions) *AskModel {
+	// Check if AI is configured
+	if err := app.CheckConfig(cfg); err != nil {
+		// Return a model that will show the error
+		ti := textarea.New()
+		ti.SetHeight(8)
+
+		headerStyle := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("86")).
+			Bold(true)
+
+		errorStyle := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("203")).
+			Bold(true)
+
+		return &AskModel{
+			ctx:       ctx,
+			cfg:       cfg,
+			opts:      opts,
+			state:     AskStateFinished,
+			canceled:  true,
+			errorMsg:  err.Error(),
+			promptInput: ti,
+			headerStyle: headerStyle,
+			errorStyle: errorStyle,
+		}
+	}
+
 	// Create prompt textarea
 	ti := textarea.New()
 	ti.Placeholder = "Describe the workflow or step you want to create..."
@@ -153,23 +181,23 @@ func (m *AskModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.promptInput, cmd = m.promptInput.Update(msg)
 		cmds = append(cmds, cmd)
 
-	case AskStateRedacting:
+	case AskStatePreviewing:
 		var cmd tea.Cmd
 		var model tea.Model
-		model, cmd = m.redactionModel.Update(msg)
-		m.redactionModel = model.(RedactionModel)
+		model, cmd = m.aiPreviewModel.Update(msg)
+		m.aiPreviewModel = model.(AIPreviewModel)
 		cmds = append(cmds, cmd)
 
-		// Check if redaction is done
-		if m.redactionModel.DidConfirm() {
+		// Check if preview is done
+		if m.aiPreviewModel.DidConfirm() {
 			// User confirmed, proceed to generation
 			m.state = AskStateGenerating
 			return m, m.generateWorkflow()
 		}
-		if m.redactionModel.DidCancel() {
+		if m.aiPreviewModel.DidCancel() {
 			// User canceled, go back to prompt
 			m.state = AskStatePrompting
-			m.redactionModel = RedactionModel{}
+			m.promptInput.Focus()
 			return m, nil
 		}
 
@@ -209,18 +237,41 @@ func (m *AskModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case tea.KeyCtrlS:
 		if m.state == AskStatePrompting {
-			// Submit prompt and move to redaction
+			// Submit prompt and move to preview
 			prompt := m.promptInput.Value()
 			if strings.TrimSpace(prompt) == "" {
 				m.errorMsg = "Please enter a description"
 				return m, nil
-		}
+			}
 			m.errorMsg = ""
 			m.promptInput.Blur()
 
-			// Move to redaction
-			m.redactionModel = NewRedactionModel(prompt)
-			m.state = AskStateRedacting
+			// Build provider info for preview
+			provider := m.opts.Provider
+			if provider == "" {
+				provider = m.cfg.AI.Provider
+			}
+			if provider == "" {
+				provider = "openai_compat"
+			}
+
+			model := m.opts.Model
+			if model == "" {
+				model = m.cfg.AI.Model
+			}
+			if model == "" {
+				model = "gpt-4o-mini"
+			}
+
+			// Apply redaction if needed
+			redactedPrompt := prompt
+			if m.opts.Redact != app.RedactNone {
+				redactedPrompt = ai.Redact(prompt)
+			}
+
+			// Move to preview
+			m.aiPreviewModel = NewAIPreviewModel(provider, model, string(m.opts.Redact), redactedPrompt)
+			m.state = AskStatePreviewing
 			return m, nil
 		}
 	}
@@ -231,68 +282,28 @@ func (m *AskModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 // generateWorkflow is a tea.Cmd that generates the workflow.
 func (m *AskModel) generateWorkflow() tea.Cmd {
 	return func() tea.Msg {
-		// Get redacted prompt
-		prompt := m.redactionModel.GetRedactedContent()
+		// Get the prompt from the preview (already redacted)
+		prompt := m.aiPreviewModel.Prompt
 
-		// Build AI config
-		aiCfg := m.buildAIConfig()
+		// Build app options
+		appOpts := &app.AskOptions{
+			Prompt:    prompt,
+			Provider:  m.opts.Provider,
+			Model:     m.opts.Model,
+			APIKeyEnv: m.opts.APIKeyEnv,
+			As:        m.opts.As,
+			Identity:  m.opts.Identity,
+			Redact:    m.opts.Redact,
+		}
 
-		// Create provider
-		provider, err := ai.NewProvider(aiCfg)
+		// Generate workflow using app layer
+		result, err := app.GenerateWorkflow(m.ctx, m.cfg, appOpts)
 		if err != nil {
 			return generateWorkflowMsg{Error: err}
 		}
 
-		if provider == nil {
-			return generateWorkflowMsg{Error: fmt.Errorf("AI provider not configured")}
-		}
-
-		m.provider = provider
-
-		// Generate workflow
-		req := ai.GenerateRequest{
-			Prompt: prompt,
-			Options: ai.GenerateOptions{
-				IncludePlaceholders: true,
-			},
-		}
-
-		wf, err := provider.GenerateWorkflow(m.ctx, req)
-		if err != nil {
-			return generateWorkflowMsg{Error: err}
-		}
-
-		return generateWorkflowMsg{Workflow: wf}
+		return generateWorkflowMsg{Workflow: result.Workflow}
 	}
-}
-
-// buildAIConfig builds AI config from options and global config.
-func (m *AskModel) buildAIConfig() *ai.Config {
-	aiCfg := ai.DefaultConfig()
-
-	// Apply options
-	if m.opts.Provider != "" {
-		aiCfg.Provider = m.opts.Provider
-	}
-	if m.opts.Model != "" {
-		aiCfg.Model = m.opts.Model
-	}
-	if m.opts.APIKeyEnv != "" {
-		aiCfg.APIKey = os.Getenv(m.opts.APIKeyEnv)
-	}
-
-	// Apply global config if available
-	if m.cfg.AI.Provider != "" {
-		aiCfg.Provider = m.cfg.AI.Provider
-	}
-	if m.cfg.AI.Model != "" {
-		aiCfg.Model = m.cfg.AI.Model
-	}
-	if m.cfg.AI.BaseURL != "" {
-		aiCfg.BaseURL = m.cfg.AI.BaseURL
-	}
-
-	return aiCfg
 }
 
 // View renders the ask model.
@@ -300,8 +311,8 @@ func (m *AskModel) View() string {
 	switch m.state {
 	case AskStatePrompting:
 		return m.renderPromptView()
-	case AskStateRedacting:
-		return m.redactionModel.View()
+	case AskStatePreviewing:
+		return m.aiPreviewModel.View()
 	case AskStateGenerating:
 		return m.renderGeneratingView()
 	case AskStateReviewing:
@@ -334,6 +345,14 @@ func (m *AskModel) renderPromptView() string {
 	b.WriteString(m.promptInput.View())
 	b.WriteString("\n\n")
 
+	// Redaction info
+	redactInfo := fmt.Sprintf("Redaction: %s", m.opts.Redact)
+	if m.opts.Redact == app.RedactNone {
+		redactInfo += " (no data will be redacted)"
+	}
+	b.WriteString(m.infoStyle.Render(redactInfo))
+	b.WriteString("\n\n")
+
 	// Footer
 	footerStyle := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("241")).
@@ -359,8 +378,10 @@ func (m *AskModel) renderGeneratingView() string {
 
 	// Show provider info
 	providerName := "unknown"
-	if m.provider != nil {
-		providerName = m.provider.Name()
+	if m.opts.Provider != "" {
+		providerName = m.opts.Provider
+	} else if m.cfg.AI.Provider != "" {
+		providerName = m.cfg.AI.Provider
 	}
 	b.WriteString(m.infoStyle.Render(fmt.Sprintf("Provider: %s", providerName)))
 	b.WriteString("\n")
@@ -380,7 +401,11 @@ func (m *AskModel) renderFinishedView() string {
 
 	b.WriteString("\n\n")
 
-	if m.canceled {
+	if m.errorMsg != "" && m.canceled {
+		b.WriteString(m.errorStyle.Render("⚠️  AI Configuration Error"))
+		b.WriteString("\n\n")
+		b.WriteString(m.errorMsg)
+	} else if m.canceled {
 		b.WriteString(m.headerStyle.Render("✖ Canceled"))
 		b.WriteString("\n\n")
 		b.WriteString("The operation was canceled.")
