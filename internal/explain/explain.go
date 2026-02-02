@@ -326,15 +326,15 @@ func builtinRules() []Rule {
 			Category:   "filesystem",
 		},
 		{
-			Pattern:     `(?i)\brm\s+.*`,
-			Explanation: "Removes (deletes) files or directories. This operation is generally irreversible.",
-			Risk:       "medium",
+			Pattern:     `(?i)\brm\s+(-rf|-r)\s+`,
+			Explanation: "Recursively deletes files and directories. Extremely dangerous - destroys all data in the target path.",
+			Risk:       "high",
 			Category:   "filesystem",
 		},
 		{
-			Pattern:     `(?i)\brm\s+(-rf|-r).*\/`,
-			Explanation: "Recursively deletes files and directories. Extremely dangerous - destroys all data in the target path.",
-			Risk:       "high",
+			Pattern:     `(?i)\brm\s+.*`,
+			Explanation: "Removes (deletes) files or directories. This operation is generally irreversible.",
+			Risk:       "medium",
 			Category:   "filesystem",
 		},
 		{
